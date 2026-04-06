@@ -13,6 +13,7 @@ from typing import Iterable
 sys.path.append(str(Path(__file__).resolve().parent))
 
 from common.logging_utils import setup_logger
+from common.workspace import resolve_code_root, resolve_workspace_root
 from common.presets import DEFAULT_PRESET_NAME, get_preset_names
 
 
@@ -46,27 +47,32 @@ class StepResult:
     errors: list[str] = field(default_factory=list)
 
 
-def project_root_from_script() -> Path:
-    return Path(__file__).resolve().parent.parent
+def code_root_from_script() -> Path:
+    return resolve_code_root(__file__)
 
 
-def ensure_dirs(root: Path, logger) -> dict[str, Path]:
+def workspace_root_from_script() -> Path:
+    return resolve_workspace_root(caller_file=__file__)
+
+
+def ensure_dirs(code_root: Path, workspace_root: Path, logger) -> dict[str, Path]:
     paths = {
-        "root": root,
-        "data": root / "data",
-        "input_video": root / "data" / "input_video",
-        "frames_360": root / "data" / "frames_360",
-        "frames_perspective": root / "data" / "frames_perspective",
-        "colmap": root / "data" / "colmap",
-        "colmap_images": root / "data" / "colmap" / "images",
-        "colmap_sparse": root / "data" / "colmap" / "sparse",
-        "logs": root / "logs",
-        "scripts": root / "scripts",
-        "extract_script": root / "scripts" / "extract_frames.py",
-        "convert_script": root / "scripts" / "convert_360_to_views.py",
-        "prepare_script": root / "scripts" / "prepare_colmap_images.py",
-        "colmap_script": root / "scripts" / "run_colmap.py",
-        "report_script": root / "scripts" / "pipeline_report.py",
+        "code_root": code_root,
+        "workspace_root": workspace_root,
+        "data": workspace_root / "data",
+        "input_video": workspace_root / "data" / "input_video",
+        "frames_360": workspace_root / "data" / "frames_360",
+        "frames_perspective": workspace_root / "data" / "frames_perspective",
+        "colmap": workspace_root / "data" / "colmap",
+        "colmap_images": workspace_root / "data" / "colmap" / "images",
+        "colmap_sparse": workspace_root / "data" / "colmap" / "sparse",
+        "logs": workspace_root / "logs",
+        "scripts": code_root / "scripts",
+        "extract_script": code_root / "scripts" / "extract_frames.py",
+        "convert_script": code_root / "scripts" / "convert_360_to_views.py",
+        "prepare_script": code_root / "scripts" / "prepare_colmap_images.py",
+        "colmap_script": code_root / "scripts" / "run_colmap.py",
+        "report_script": code_root / "scripts" / "pipeline_report.py",
     }
 
     for key in (
@@ -78,7 +84,6 @@ def ensure_dirs(root: Path, logger) -> dict[str, Path]:
         "colmap_images",
         "colmap_sparse",
         "logs",
-        "scripts",
     ):
         paths[key].mkdir(parents=True, exist_ok=True)
         logger.debug("Ensured directory exists: %s -> %s", key, paths[key])
@@ -460,15 +465,23 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    logger, run_log_path, latest_log_path = setup_logger(SCRIPT_NAME, verbose=args.verbose)
+
+    code_root = code_root_from_script()
+    workspace_root = workspace_root_from_script()
+
+    logger, run_log_path, latest_log_path = setup_logger(
+        SCRIPT_NAME,
+        verbose=args.verbose,
+        workspace_root=workspace_root,
+    )
 
     try:
-        root = project_root_from_script()
-        logger.info("Project root: %s", root)
+        logger.info("Code root: %s", code_root)
+        logger.info("Workspace root: %s", workspace_root)
         logger.info("Run log: %s", run_log_path)
         logger.info("Latest log: %s", latest_log_path)
 
-        paths = ensure_dirs(root, logger)
+        paths = ensure_dirs(code_root, workspace_root, logger)
         logger.info("Project folders checked and created if missing")
         logger.info("Preset: %s", args.preset)
 
@@ -506,7 +519,13 @@ def main() -> int:
 
         for index, (step_name, cmd) in enumerate(commands, start=1):
             logger.info("Starting pipeline step %s / %s: %s", index, len(commands), step_name)
-            result = run_command_streaming(cmd, logger, verbose=args.verbose, cwd=root, step_name=step_name)
+            result = run_command_streaming(
+                cmd,
+                logger,
+                verbose=args.verbose,
+                cwd=code_root,
+                step_name=step_name,
+            )
             results.append(result)
             logger.info("Completed pipeline step: %s", step_name)
 

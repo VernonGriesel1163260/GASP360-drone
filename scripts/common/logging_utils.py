@@ -5,19 +5,25 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-
-def get_project_root() -> Path:
-    return Path(__file__).resolve().parents[2]
+from common.workspace import resolve_workspace_root
 
 
-def ensure_log_dir(script_name: str) -> Path:
-    log_dir = get_project_root() / "logs" / script_name
+def get_project_root(workspace_root: str | Path | None = None) -> Path:
+    return resolve_workspace_root(workspace_root, __file__)
+
+
+def ensure_log_dir(script_name: str, workspace_root: str | Path | None = None) -> Path:
+    log_dir = get_project_root(workspace_root) / "logs" / script_name
     log_dir.mkdir(parents=True, exist_ok=True)
     return log_dir
 
 
-def setup_logger(script_name: str, verbose: bool = False) -> tuple[logging.Logger, Path, Path]:
-    log_dir = ensure_log_dir(script_name)
+def setup_logger(
+    script_name: str,
+    verbose: bool = False,
+    workspace_root: str | Path | None = None,
+) -> tuple[logging.Logger, Path, Path]:
+    log_dir = ensure_log_dir(script_name, workspace_root=workspace_root)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_log_path = log_dir / f"{script_name}_{timestamp}.log"

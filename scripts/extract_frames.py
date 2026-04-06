@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -9,30 +8,37 @@ from typing import Iterable
 
 sys.path.append(str(Path(__file__).resolve().parent))
 from common.logging_utils import setup_logger
+from common.workspace import resolve_code_root, resolve_workspace_root
 
 
 SCRIPT_NAME = "extract_frames"
 
 
-def project_root_from_script() -> Path:
-    return Path(__file__).resolve().parent.parent
+def code_root_from_script() -> Path:
+    return resolve_code_root(__file__)
 
 
-def ensure_dirs(root: Path, logger) -> dict[str, Path]:
+def workspace_root_from_script() -> Path:
+    return resolve_workspace_root(caller_file=__file__)
+
+
+def ensure_dirs(code_root: Path, workspace_root: Path, logger) -> dict[str, Path]:
     paths = {
-        "data": root / "data",
-        "input_video": root / "data" / "input_video",
-        "frames_360": root / "data" / "frames_360",
-        "frames_perspective": root / "data" / "frames_perspective",
-        "colmap": root / "data" / "colmap",
-        "tools": root / "tools",
-        "scripts": root / "scripts",
-        "logs": root / "logs",
+        "code_root": code_root,
+        "workspace_root": workspace_root,
+        "data": workspace_root / "data",
+        "input_video": workspace_root / "data" / "input_video",
+        "frames_360": workspace_root / "data" / "frames_360",
+        "frames_perspective": workspace_root / "data" / "frames_perspective",
+        "colmap": workspace_root / "data" / "colmap",
+        "logs": workspace_root / "logs",
+        "tools": code_root / "tools",
+        "scripts": code_root / "scripts",
     }
 
-    for name, path in paths.items():
-        path.mkdir(parents=True, exist_ok=True)
-        logger.debug("Ensured directory exists: %s -> %s", name, path)
+    for key in ("data", "input_video", "frames_360", "frames_perspective", "colmap", "logs"):
+        paths[key].mkdir(parents=True, exist_ok=True)
+        logger.debug("Ensured directory exists: %s -> %s", key, paths[key])
 
     for view_name in ("front", "right", "back", "left"):
         view_dir = paths["frames_perspective"] / view_name
@@ -42,25 +48,20 @@ def ensure_dirs(root: Path, logger) -> dict[str, Path]:
     return paths
 
 
-def find_ffmpeg(root: Path) -> Path:
+def find_ffmpeg(code_root: Path) -> Path:
     candidates = [
-        root / "tools" / "ffmpeg" / "bin" / "ffmpeg.exe",
-        root / "tools" / "ffmpeg.exe",
+        code_root / "tools" / "ffmpeg" / "bin" / "ffmpeg.exe",
+        code_root / "tools" / "ffmpeg.exe",
     ]
 
     for candidate in candidates:
         if candidate.exists():
             return candidate
 
-    ffmpeg_on_path = shutil.which("ffmpeg")
-    if ffmpeg_on_path:
-        return Path(ffmpeg_on_path)
-
     raise FileNotFoundError(
         "FFmpeg was not found. Expected one of:\n"
-        f"  - {root / 'tools' / 'ffmpeg' / 'bin' / 'ffmpeg.exe'}\n"
-        f"  - {root / 'tools' / 'ffmpeg.exe'}\n"
-        "Or available on PATH."
+        f"  - {code_root / 'tools' / 'ffmpeg' / 'bin' / 'ffmpeg.exe'}\n"
+        f"  - {code_root / 'tools' / 'ffmpeg.exe'}"
     )
 
 
@@ -68,10 +69,6 @@ def find_ffprobe(ffmpeg_path: Path) -> Path | None:
     local_ffprobe = ffmpeg_path.parent / "ffprobe.exe"
     if local_ffprobe.exists():
         return local_ffprobe
-
-    ffprobe_on_path = shutil.which("ffprobe")
-    if ffprobe_on_path:
-        return Path(ffprobe_on_path)
 
     return None
 
@@ -287,18 +284,24 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    logger, run_log_path, latest_log_path = setup_logger(SCRIPT_NAME, verbose=args.verbose)
+    code_root = code_root_from_script()
+    workspace_root = workspace_root_from_script()
+    logger, run_log_path, latest_log_path = setup_logger(
+        SCRIPT_NAME,
+        verbose=args.verbose,
+        workspace_root=workspace_root,
+    )
 
     try:
-        root = project_root_from_script()
-        logger.info("Project root: %s", root)
+        logger.info("Code root: %s", code_root)
+        logger.info("Workspace root: %s", workspace_root)
         logger.info("Run log: %s", run_log_path)
         logger.info("Latest log: %s", latest_log_path)
 
-        paths = ensure_dirs(root, logger)
+        paths = ensure_dirs(code_root, workspace_root, logger)
         logger.info("Project folders checked and created if missing")
 
-        ffmpeg_path = find_ffmpeg(root)
+        ffmpeg_path = find_ffmpeg(code_root)
         logger.info("FFmpeg found: %s", ffmpeg_path)
 
         ffprobe_path = find_ffprobe(ffmpeg_path)

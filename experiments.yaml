@@ -1,0 +1,64 @@
+global:
+  input_video: "E:/_root/projects/Gaussian Splats/GASP360-drone/data/input_video/15339837_3840_2160_50fps.mp4"
+  base_output_root: "E:/_root/projects/Gaussian Splats/GASP360-drone/experiments"
+  python_executable: "E:/_root/projects/Gaussian Splats/GASP360-drone/.venv/Scripts/python.exe"
+  pipeline_args:
+    - "--target-frames"
+    - "100"
+    - "--overwrite"
+    - "--clean-extract"
+    - "--clean-convert"
+    - "--clean-prepare"
+    - "--reset-colmap"
+    - "--force-cli"
+    - "--validation-mode"
+  inspect_args:
+    - "--summary-json"
+    - "--promote-best"
+
+experiments:
+  - id: "indoor_h85"
+    description: "Baseline indoor_real_estate h_fov=85"
+    pipeline_args:
+      - "--preset"
+      - "indoor_real_estate"
+      - "--h-fov"
+      - "85"
+      - "--v-fov"
+      - "85"
+
+  - id: "indoor_h75"
+    description: "Narrower FOV"
+    pipeline_args:
+      - "--preset"
+      - "indoor_real_estate"
+      - "--h-fov"
+      - "75"
+      - "--v-fov"
+      - "75"
+
+  - id: "indoor_h95"
+    description: "Wider FOV"
+    pipeline_args:
+      - "--preset"
+      - "indoor_real_estate"
+      - "--h-fov"
+      - "95"
+      - "--v-fov"
+      - "95"
+
+  - id: "indoor_h85_multi_camera"
+    description: "Same as baseline, but no single-camera flag"
+    pipeline_args:
+      - "--preset"
+      - "indoor_real_estate"
+      - "--h-fov"
+      - "85"
+      - "--v-fov"
+      - "85"
+
+  - id: "tight_interiors_6view"
+    description: "6-view preset"
+    pipeline_args:
+      - "--preset"
+      - "tight_interiors"

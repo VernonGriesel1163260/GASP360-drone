@@ -178,6 +178,57 @@ python .\scripts\convert_360_to_views.py --preset tight_interiors --input-prefix
 python .\scripts\run_colmap.py --preset outdoor_drone --camera-model OPENCV --matcher sequential_matcher --force-cli --reset --verbose
 ```
 
+## Selecting best sparse model
+TODO fill in infor here
+
+## Experiments for options and optimising register ratio of registered images
+TODO more info here
+
+### How to Run
+How to run the matrix
+
+Run all experiments:
+
+python .\scripts\run_experiments.py --config .\experiments.yaml --verbose
+
+Resume later without redoing completed ones:
+
+python .\scripts\run_experiments.py --config .\experiments.yaml --resume --verbose
+
+Rerun just one experiment from an earlier pipeline point:
+
+python .\scripts\run_experiments.py --config .\experiments.yaml --experiment indoor_h95 --step-from convert_360_to_views --verbose
+
+Rerun just one from COLMAP onward:
+
+python .\scripts\run_experiments.py --config .\experiments.yaml --experiment tight_interiors_6view --step-from run_colmap --verbose
+### How to visualize the collected data
+
+After the matrix run, you’ll get:
+
+<base_output_root>\experiments_summary.csv
+<base_output_root>\experiments_summary.json
+
+Run it like this:
+
+python .\scripts\visualize_experiments.py --summary-csv ".\experiments\experiments_summary.csv" --output-dir ".\experiments\_reports"
+
+And if you want failed experiments included too:
+
+python .\scripts\visualize_experiments.py --summary-csv ".\experiments\experiments_summary.csv" --output-dir
+
+That will generate:
+
+registration_ratio.png
+registered_images.png
+points3d.png
+observations.png
+Registration ratio chart
+Registered images chart
+Points3D chart
+Observations chart
+Markdown summary
+
 ## Logs
 
 Each script writes logs under `logs/<script_name>/` and also updates a `*_latest.log` file for quick access.
@@ -209,34 +260,15 @@ So the pipeline summary is almost certainly counting a line that merely contains
 but the error/warning classification is not trustworthy enough yet for strong automation decisions
 
 ### 2
-What I would do next, in order:
+If you still want to test multi-camera later
 
-Keep using inspect_colmap_models.py as-is. It is working.
-Add a small enhancement so it also prints:
-total input images
-registration ratio for each model
-Then run a few controlled experiments:
-preset indoor_real_estate at h_fov=85
-same preset at h_fov=75
-same preset at h_fov=95
-try single_camera=False
-try a 6-view preset instead of 4-view
+I would not retry the exact same combination first.
 
-A very useful metric for future comparisons is:
+Try one of these instead:
 
-registration_ratio = registered_images / total_colmap_images
+single_camera=False with h_fov=95
+single_camera=False with a different camera model, such as OPENCV
+single_camera=False with fewer frames, just to test stability quickly
 
-For this run, that would be about:
+But I would only do that after you finish refining the winning branch around h_fov=95.
 
-100 / 400 = 25%
-
-That is the number I would optimize next.
-
-So my assessment is:
-
-Step 3 works
-best-model selection works
-promotion works
-the next technical challenge is not tooling anymore, it is reconstruction quality tuning
-
-I’d suggest the next refinement be updating inspect_colmap_models.py and pipeline_report.py to include registration ratio and best-model summary automatically, then we tune presets against that metric.

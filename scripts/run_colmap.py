@@ -4,12 +4,14 @@ import argparse
 import shutil
 import subprocess
 import sys
+from collections import deque
 from pathlib import Path
 from typing import Iterable
 
 sys.path.append(str(Path(__file__).resolve().parent))
 
 from common.logging_utils import setup_logger
+from common.workspace import resolve_code_root, resolve_workspace_root
 from common.presets import DEFAULT_PRESET_NAME, get_preset, get_preset_names
 from common.config_merge import deep_merge_dict, build_colmap_override_dict
 from common.colmap_capabilities import append_supported_option
@@ -18,24 +20,30 @@ from common.colmap_capabilities import append_supported_option
 SCRIPT_NAME = "colmap_reconstruction"
 
 
-def project_root_from_script() -> Path:
-    return Path(__file__).resolve().parent.parent
+def code_root_from_script() -> Path:
+    return resolve_code_root(__file__)
 
 
-def ensure_dirs(root: Path, logger) -> dict[str, Path]:
+def workspace_root_from_script() -> Path:
+    return resolve_workspace_root(caller_file=__file__)
+
+
+def ensure_dirs(code_root: Path, workspace_root: Path, logger) -> dict[str, Path]:
     paths = {
-        "data": root / "data",
-        "colmap": root / "data" / "colmap",
-        "colmap_images": root / "data" / "colmap" / "images",
-        "colmap_sparse": root / "data" / "colmap" / "sparse",
-        "logs": root / "logs",
-        "scripts": root / "scripts",
-        "colmap_install_dir": root / "COLMAP",
-        "colmap_exe": root / "COLMAP" / "bin" / "colmap.exe",
-        "colmap_bat": root / "COLMAP" / "COLMAP.bat",
+        "code_root": code_root,
+        "workspace_root": workspace_root,
+        "data": workspace_root / "data",
+        "colmap": workspace_root / "data" / "colmap",
+        "colmap_images": workspace_root / "data" / "colmap" / "images",
+        "colmap_sparse": workspace_root / "data" / "colmap" / "sparse",
+        "logs": workspace_root / "logs",
+        "scripts": code_root / "scripts",
+        "colmap_install_dir": code_root / "COLMAP",
+        "colmap_exe": code_root / "COLMAP" / "bin" / "colmap.exe",
+        "colmap_bat": code_root / "COLMAP" / "COLMAP.bat",
     }
 
-    for key in ("data", "colmap", "colmap_images", "colmap_sparse", "logs", "scripts"):
+    for key in ("data", "colmap", "colmap_images", "colmap_sparse", "logs"):
         paths[key].mkdir(parents=True, exist_ok=True)
         logger.debug("Ensured directory exists: %s -> %s", key, paths[key])
 
@@ -46,13 +54,22 @@ def quote_cmd(cmd: Iterable[str]) -> str:
     return " ".join(f'"{c}"' if " " in c else c for c in cmd)
 
 
-def stream_process_output(process: subprocess.Popen, logger, prefix: str, verbose: bool) -> None:
+def stream_process_output(
+    process: subprocess.Popen,
+    logger,
+    prefix: str,
+    verbose: bool,
+    tail_lines: deque[str] | None = None,
+) -> None:
     assert process.stdout is not None
 
     for raw_line in process.stdout:
         line = raw_line.rstrip()
         if not line:
             continue
+
+        if tail_lines is not None:
+            tail_lines.append(line)
 
         logger.debug("%s %s", prefix, line)
         if verbose:
@@ -62,6 +79,7 @@ def stream_process_output(process: subprocess.Popen, logger, prefix: str, verbos
 def run_command_streaming(cmd: list[str], logger, verbose: bool = False) -> None:
     logger.info("Running command")
     logger.debug("Command: %s", quote_cmd(cmd))
+    output_tail: deque[str] = deque(maxlen=40)
 
     is_bat = str(cmd[0]).lower().endswith(".bat")
 
@@ -95,14 +113,23 @@ def run_command_streaming(cmd: list[str], logger, verbose: bool = False) -> None
         )
 
     try:
-        stream_process_output(process, logger, prefix="[SUBPROCESS]", verbose=verbose)
+        stream_process_output(
+            process,
+            logger,
+            prefix="[SUBPROCESS]",
+            verbose=verbose,
+            tail_lines=output_tail,
+        )
     finally:
         return_code = process.wait()
 
     logger.debug("Command exit code: %s", return_code)
 
     if return_code != 0:
-        raise RuntimeError(f"Command failed with exit code {return_code}")
+        details = f"Command failed with exit code {return_code}"
+        if output_tail:
+            details += "\nLast subprocess output lines:\n" + "\n".join(output_tail)
+        raise RuntimeError(details)
 
 
 def detect_pycolmap(logger):
@@ -275,6 +302,41 @@ def run_cli_pipeline(
         logger.info("Completed CLI step: %s", step_name)
 
 
+def run_cli_pipeline_with_failure_note(
+    *,
+    paths: dict[str, Path],
+    sparse_path: Path,
+    colmap_cmd: Path,
+    database_path: Path,
+    image_path: Path,
+    colmap_config: dict,
+    logger,
+    verbose: bool,
+) -> None:
+    try:
+        run_cli_pipeline(
+            colmap_cmd=colmap_cmd,
+            database_path=database_path,
+            image_path=image_path,
+            sparse_path=sparse_path,
+            matcher_name=colmap_config["matcher"],
+            camera_model=colmap_config["camera_model"],
+            single_camera=colmap_config["single_camera"],
+            use_gpu=colmap_config["use_gpu"],
+            max_image_size=colmap_config["max_image_size"],
+            logger=logger,
+            verbose=verbose,
+        )
+    except Exception as exc:
+        model_dirs = [p for p in sparse_path.iterdir() if p.is_dir()] if sparse_path.exists() else []
+        if not model_dirs:
+            logger.error("COLMAP mapper failed and produced no sparse models.")
+            failure_note = paths["colmap"] / "colmap_failure_reason.txt"
+            failure_note.write_text(str(exc), encoding="utf-8")
+            logger.error("Wrote failure reason: %s", failure_note)
+        raise
+
+
 def run_pycolmap_pipeline(
     pycolmap,
     database_path: Path,
@@ -367,15 +429,23 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    logger, run_log_path, latest_log_path = setup_logger(SCRIPT_NAME, verbose=args.verbose)
+
+    code_root = code_root_from_script()
+    workspace_root = workspace_root_from_script()
+
+    logger, run_log_path, latest_log_path = setup_logger(
+        SCRIPT_NAME,
+        verbose=args.verbose,
+        workspace_root=workspace_root,
+    )
 
     try:
-        root = project_root_from_script()
-        logger.info("Project root: %s", root)
+        logger.info("Code root: %s", code_root)
+        logger.info("Workspace root: %s", workspace_root)
         logger.info("Run log: %s", run_log_path)
         logger.info("Latest log: %s", latest_log_path)
 
-        paths = ensure_dirs(root, logger)
+        paths = ensure_dirs(code_root, workspace_root, logger)
         logger.info("Project folders checked and created if missing")
 
         preset = get_preset(args.preset)
@@ -436,31 +506,25 @@ def main() -> int:
                 logger.warning("pycolmap pipeline failed: %s", exc)
                 if colmap_exe is not None:
                     logger.info("Falling back to colmap.exe backend")
-                    run_cli_pipeline(
+                    run_cli_pipeline_with_failure_note(
+                        paths=paths,
+                        sparse_path=sparse_path,
                         colmap_cmd=colmap_exe,
                         database_path=database_path,
                         image_path=image_path,
-                        sparse_path=sparse_path,
-                        matcher_name=colmap_config["matcher"],
-                        camera_model=colmap_config["camera_model"],
-                        single_camera=colmap_config["single_camera"],
-                        use_gpu=colmap_config["use_gpu"],
-                        max_image_size=colmap_config["max_image_size"],
+                        colmap_config=colmap_config,
                         logger=logger,
                         verbose=args.verbose,
                     )
                 elif colmap_bat is not None:
                     logger.info("Falling back to COLMAP.bat backend")
-                    run_cli_pipeline(
+                    run_cli_pipeline_with_failure_note(
+                        paths=paths,
+                        sparse_path=sparse_path,
                         colmap_cmd=colmap_bat,
                         database_path=database_path,
                         image_path=image_path,
-                        sparse_path=sparse_path,
-                        matcher_name=colmap_config["matcher"],
-                        camera_model=colmap_config["camera_model"],
-                        single_camera=colmap_config["single_camera"],
-                        use_gpu=colmap_config["use_gpu"],
-                        max_image_size=colmap_config["max_image_size"],
+                        colmap_config=colmap_config,
                         logger=logger,
                         verbose=args.verbose,
                     )
@@ -470,31 +534,25 @@ def main() -> int:
 
         elif colmap_exe is not None:
             logger.info("Selected backend: colmap.exe")
-            run_cli_pipeline(
+            run_cli_pipeline_with_failure_note(
+                paths=paths,
+                sparse_path=sparse_path,
                 colmap_cmd=colmap_exe,
                 database_path=database_path,
                 image_path=image_path,
-                sparse_path=sparse_path,
-                matcher_name=colmap_config["matcher"],
-                camera_model=colmap_config["camera_model"],
-                single_camera=colmap_config["single_camera"],
-                use_gpu=colmap_config["use_gpu"],
-                max_image_size=colmap_config["max_image_size"],
+                colmap_config=colmap_config,
                 logger=logger,
                 verbose=args.verbose,
             )
         elif colmap_bat is not None:
             logger.info("Selected backend: COLMAP.bat")
-            run_cli_pipeline(
+            run_cli_pipeline_with_failure_note(
+                paths=paths,
+                sparse_path=sparse_path,
                 colmap_cmd=colmap_bat,
                 database_path=database_path,
                 image_path=image_path,
-                sparse_path=sparse_path,
-                matcher_name=colmap_config["matcher"],
-                camera_model=colmap_config["camera_model"],
-                single_camera=colmap_config["single_camera"],
-                use_gpu=colmap_config["use_gpu"],
-                max_image_size=colmap_config["max_image_size"],
+                colmap_config=colmap_config,
                 logger=logger,
                 verbose=args.verbose,
             )

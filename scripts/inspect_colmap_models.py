@@ -15,6 +15,7 @@ from typing import Iterable
 sys.path.append(str(Path(__file__).resolve().parent))
 
 from common.logging_utils import setup_logger
+from common.workspace import resolve_code_root, resolve_workspace_root
 
 
 SCRIPT_NAME = "inspect_colmap_models"
@@ -36,25 +37,30 @@ class ModelStats:
     raw_output: str = ""
 
 
-def project_root_from_script() -> Path:
-    return Path(__file__).resolve().parent.parent
+def code_root_from_script() -> Path:
+    return resolve_code_root(__file__)
 
 
-def ensure_dirs(root: Path, logger) -> dict[str, Path]:
+def workspace_root_from_script() -> Path:
+    return resolve_workspace_root(caller_file=__file__)
+
+
+def ensure_dirs(code_root: Path, workspace_root: Path, logger) -> dict[str, Path]:
     paths = {
-        "root": root,
-        "data": root / "data",
-        "colmap": root / "data" / "colmap",
-        "colmap_sparse": root / "data" / "colmap" / "sparse",
-        "colmap_images": root / "data" / "colmap" / "images",
-        "colmap_best": root / "data" / "colmap" / "sparse_best",
-        "logs": root / "logs",
-        "scripts": root / "scripts",
-        "colmap_exe": root / "COLMAP" / "bin" / "colmap.exe",
-        "colmap_bat": root / "COLMAP" / "COLMAP.bat",
+        "code_root": code_root,
+        "workspace_root": workspace_root,
+        "data": workspace_root / "data",
+        "colmap": workspace_root / "data" / "colmap",
+        "colmap_sparse": workspace_root / "data" / "colmap" / "sparse",
+        "colmap_images": workspace_root / "data" / "colmap" / "images",
+        "colmap_best": workspace_root / "data" / "colmap" / "sparse_best",
+        "logs": workspace_root / "logs",
+        "scripts": code_root / "scripts",
+        "colmap_exe": code_root / "COLMAP" / "bin" / "colmap.exe",
+        "colmap_bat": code_root / "COLMAP" / "COLMAP.bat",
     }
 
-    for key in ("data", "colmap", "colmap_sparse", "colmap_images", "colmap_best", "logs", "scripts"):
+    for key in ("data", "colmap", "colmap_sparse", "colmap_images", "colmap_best", "logs"):
         paths[key].mkdir(parents=True, exist_ok=True)
         logger.debug("Ensured directory exists: %s -> %s", key, paths[key])
 
@@ -303,15 +309,23 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    logger, run_log_path, latest_log_path = setup_logger(SCRIPT_NAME, verbose=args.verbose)
+
+    code_root = code_root_from_script()
+    workspace_root = workspace_root_from_script()
+
+    logger, run_log_path, latest_log_path = setup_logger(
+        SCRIPT_NAME,
+        verbose=args.verbose,
+        workspace_root=workspace_root,
+    )
 
     try:
-        root = project_root_from_script()
-        logger.info("Project root: %s", root)
+        logger.info("Code root: %s", code_root)
+        logger.info("Workspace root: %s", workspace_root)
         logger.info("Run log: %s", run_log_path)
         logger.info("Latest log: %s", latest_log_path)
 
-        paths = ensure_dirs(root, logger)
+        paths = ensure_dirs(code_root, workspace_root, logger)
 
         sparse_dir = Path(args.sparse_dir).resolve() if args.sparse_dir else paths["colmap_sparse"]
         colmap_images_dir = paths["colmap_images"]

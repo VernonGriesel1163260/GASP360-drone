@@ -11,6 +11,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parent))
 
 from common.logging_utils import setup_logger
+from common.workspace import resolve_workspace_root
 
 
 SCRIPT_NAME = "prepare_colmap_images"
@@ -20,7 +21,7 @@ DEFAULT_VIEWS = ["front", "right", "back", "left"]
 
 
 def project_root_from_script() -> Path:
-    return Path(__file__).resolve().parent.parent
+    return resolve_workspace_root(caller_file=__file__)
 
 
 def ensure_dirs(root: Path, logger) -> dict[str, Path]:
@@ -233,10 +234,14 @@ def prepare_colmap_images(
 
 def main() -> int:
     args = parse_args()
-    logger, run_log_path, latest_log_path = setup_logger(SCRIPT_NAME, verbose=args.verbose)
+    root = project_root_from_script()
+    logger, run_log_path, latest_log_path = setup_logger(
+        SCRIPT_NAME,
+        verbose=args.verbose,
+        workspace_root=root,
+    )
 
     try:
-        root = project_root_from_script()
         logger.info("Project root: %s", root)
         logger.info("Run log: %s", run_log_path)
         logger.info("Latest log: %s", latest_log_path)
