@@ -184,5 +184,5 @@ cython_debug/
 /GLOMAP
 /VIDEOS
 /DATA
-/tools
+/tools/*
 /logs
