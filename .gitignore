@@ -180,9 +180,9 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
-COLMAP\
-GLOMAP\
-VIDEOS\
-DATA\
-tools\ffmpeg\
-logs\
+/COLMAP
+/GLOMAP
+/VIDEOS
+/DATA
+/tools
+/logs
