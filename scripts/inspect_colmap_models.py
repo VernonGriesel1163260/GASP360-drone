@@ -25,6 +25,8 @@ class ModelStats:
     name: str
     path: str
     registered_images: int = 0
+    total_input_images: int = 0
+    registration_ratio: float = 0.0
     points3D: int = 0
     observations: int = 0
     mean_track_length: float = 0.0
@@ -44,6 +46,7 @@ def ensure_dirs(root: Path, logger) -> dict[str, Path]:
         "data": root / "data",
         "colmap": root / "data" / "colmap",
         "colmap_sparse": root / "data" / "colmap" / "sparse",
+        "colmap_images": root / "data" / "colmap" / "images",
         "colmap_best": root / "data" / "colmap" / "sparse_best",
         "logs": root / "logs",
         "scripts": root / "scripts",
@@ -51,11 +54,18 @@ def ensure_dirs(root: Path, logger) -> dict[str, Path]:
         "colmap_bat": root / "COLMAP" / "COLMAP.bat",
     }
 
-    for key in ("data", "colmap", "colmap_sparse", "colmap_best", "logs", "scripts"):
+    for key in ("data", "colmap", "colmap_sparse", "colmap_images", "colmap_best", "logs", "scripts"):
         paths[key].mkdir(parents=True, exist_ok=True)
         logger.debug("Ensured directory exists: %s -> %s", key, paths[key])
 
     return paths
+
+
+def count_images(folder: Path) -> int:
+    if not folder.exists():
+        return 0
+    exts = {".jpg", ".jpeg", ".png"}
+    return sum(1 for p in folder.iterdir() if p.is_file() and p.suffix.lower() in exts)
 
 
 def quote_cmd(cmd: Iterable[str]) -> str:
@@ -155,15 +165,15 @@ def parse_float(pattern: str, text: str) -> float:
     return float(m.group(1))
 
 
-def parse_model_analyzer_output(model_dir: Path, output: str) -> ModelStats:
+def parse_model_analyzer_output(model_dir: Path, output: str, total_input_images: int) -> ModelStats:
     stats = ModelStats(
         name=model_dir.name,
         path=str(model_dir),
         analyzer_ok=True,
         raw_output=output,
+        total_input_images=total_input_images,
     )
 
-    # Flexible patterns to survive minor output-format changes
     stats.registered_images = parse_int(r"Registered images\s*:\s*(\d+)", output)
     stats.points3D = parse_int(r"Points(?:3D)?\s*:\s*(\d+)", output)
     stats.observations = parse_int(r"Observations\s*:\s*(\d+)", output)
@@ -171,28 +181,32 @@ def parse_model_analyzer_output(model_dir: Path, output: str) -> ModelStats:
     stats.mean_observations_per_image = parse_float(r"Mean observations per image\s*:\s*([0-9.]+)", output)
     stats.reprojection_error = parse_float(r"Mean reprojection error\s*:\s*([0-9.]+)", output)
 
+    if total_input_images > 0:
+        stats.registration_ratio = stats.registered_images / total_input_images
+
     return stats
 
 
-def fallback_binary_presence_stats(model_dir: Path) -> ModelStats:
-    # Fallback if analyzer fails: mark folder as existing but with unknown metrics
+def fallback_binary_presence_stats(model_dir: Path, total_input_images: int) -> ModelStats:
     return ModelStats(
         name=model_dir.name,
         path=str(model_dir),
         analyzer_ok=False,
         raw_output="",
+        total_input_images=total_input_images,
+        registration_ratio=0.0,
     )
 
 
-def inspect_model(colmap_cmd: Path, model_dir: Path, logger, verbose: bool) -> ModelStats:
+def inspect_model(colmap_cmd: Path, model_dir: Path, total_input_images: int, logger, verbose: bool) -> ModelStats:
     cmd = build_model_analyzer_cmd(colmap_cmd, model_dir)
     exit_code, output = run_command_capture(cmd, logger, verbose=verbose)
 
     if exit_code != 0:
         logger.warning("model_analyzer failed for %s", model_dir)
-        return fallback_binary_presence_stats(model_dir)
+        return fallback_binary_presence_stats(model_dir, total_input_images)
 
-    return parse_model_analyzer_output(model_dir, output)
+    return parse_model_analyzer_output(model_dir, output, total_input_images)
 
 
 def sort_models(models: list[ModelStats]) -> list[ModelStats]:
@@ -220,8 +234,6 @@ def promote_best_model(best_model: ModelStats, target_dir: Path, logger, mode: s
         shutil.copytree(src_dir, target_dir)
         logger.info("Copied best model to: %s", target_dir)
     elif mode == "junction":
-        # Windows-friendly alternative would normally be a junction/symlink,
-        # but copy is safest. Keep explicit guard for now.
         shutil.copytree(src_dir, target_dir)
         logger.warning("Junction mode requested; copied instead for safety: %s", target_dir)
     else:
@@ -241,16 +253,25 @@ def write_best_model_text(best_model: ModelStats | None, output_path: Path, logg
     if best_model is None:
         output_path.write_text("No best model selected.\n", encoding="utf-8")
     else:
-        output_path.write_text(f"{best_model.name}\n{best_model.path}\n", encoding="utf-8")
+        output_path.write_text(
+            f"{best_model.name}\n"
+            f"{best_model.path}\n"
+            f"registered_images={best_model.registered_images}\n"
+            f"total_input_images={best_model.total_input_images}\n"
+            f"registration_ratio={best_model.registration_ratio:.4f}\n",
+            encoding="utf-8",
+        )
     logger.info("Wrote best-model text file: %s", output_path)
 
 
-def print_summary(models: list[ModelStats], best_model: ModelStats | None) -> None:
+def print_summary(models: list[ModelStats], best_model: ModelStats | None, total_input_images: int) -> None:
     print("\n=== COLMAP Model Inspection ===")
     print(f"Model count: {len(models)}")
+    print(f"Total COLMAP input images: {total_input_images}")
     for m in models:
         print(
             f"- {m.name}: registered_images={m.registered_images}, "
+            f"registration_ratio={m.registration_ratio:.2%}, "
             f"points3D={m.points3D}, observations={m.observations}, "
             f"mean_track_length={m.mean_track_length:.2f}, "
             f"mean_obs_per_image={m.mean_observations_per_image:.2f}, "
@@ -261,6 +282,7 @@ def print_summary(models: list[ModelStats], best_model: ModelStats | None) -> No
         print(
             f"  {best_model.name} "
             f"(registered_images={best_model.registered_images}, "
+            f"registration_ratio={best_model.registration_ratio:.2%}, "
             f"points3D={best_model.points3D}, observations={best_model.observations})"
         )
 
@@ -270,33 +292,11 @@ def parse_args() -> argparse.Namespace:
         description="Inspect COLMAP sparse models, count registered images, and choose the best one automatically."
     )
 
-    parser.add_argument(
-        "--sparse-dir",
-        type=str,
-        default=None,
-        help="Path to sparse model root. Default: data/colmap/sparse",
-    )
-    parser.add_argument(
-        "--promote-best",
-        action="store_true",
-        help="Copy the best model to data/colmap/sparse_best",
-    )
-    parser.add_argument(
-        "--promote-mode",
-        choices=["copy", "junction"],
-        default="copy",
-        help="How to promote the best model. Default: copy",
-    )
-    parser.add_argument(
-        "--summary-json",
-        action="store_true",
-        help="Write a JSON summary file into data/colmap/model_inspection.json",
-    )
-    parser.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Enable verbose console logging.",
-    )
+    parser.add_argument("--sparse-dir", type=str, default=None)
+    parser.add_argument("--promote-best", action="store_true")
+    parser.add_argument("--promote-mode", choices=["copy", "junction"], default="copy")
+    parser.add_argument("--summary-json", action="store_true")
+    parser.add_argument("--verbose", action="store_true")
 
     return parser.parse_args()
 
@@ -314,7 +314,11 @@ def main() -> int:
         paths = ensure_dirs(root, logger)
 
         sparse_dir = Path(args.sparse_dir).resolve() if args.sparse_dir else paths["colmap_sparse"]
+        colmap_images_dir = paths["colmap_images"]
+        total_input_images = count_images(colmap_images_dir)
+
         logger.info("Sparse root: %s", sparse_dir)
+        logger.info("Total COLMAP input images: %s", total_input_images)
 
         if not sparse_dir.exists():
             logger.error("Sparse directory does not exist: %s", sparse_dir)
@@ -338,7 +342,7 @@ def main() -> int:
         models: list[ModelStats] = []
         for model_dir in model_dirs:
             logger.info("Inspecting model: %s", model_dir)
-            stats = inspect_model(colmap_cmd, model_dir, logger, verbose=args.verbose)
+            stats = inspect_model(colmap_cmd, model_dir, total_input_images, logger, verbose=args.verbose)
             models.append(stats)
 
         ranked = sort_models(models)
@@ -346,10 +350,11 @@ def main() -> int:
 
         for idx, model in enumerate(ranked, start=1):
             logger.info(
-                "Rank %s | %s | registered_images=%s | points3D=%s | observations=%s",
+                "Rank %s | %s | registered_images=%s | registration_ratio=%.2f%% | points3D=%s | observations=%s",
                 idx,
                 model.name,
                 model.registered_images,
+                model.registration_ratio * 100.0,
                 model.points3D,
                 model.observations,
             )
@@ -367,7 +372,7 @@ def main() -> int:
         if args.promote_best and best_model is not None:
             promote_best_model(best_model, paths["colmap_best"], logger, args.promote_mode)
 
-        print_summary(ranked, best_model)
+        print_summary(ranked, best_model, total_input_images)
         logger.info("Model inspection completed successfully")
         return 0
 

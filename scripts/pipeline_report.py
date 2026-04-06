@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -27,11 +28,12 @@ def ensure_dirs(root: Path, logger) -> dict[str, Path]:
         "colmap": root / "data" / "colmap",
         "colmap_images": root / "data" / "colmap" / "images",
         "colmap_sparse": root / "data" / "colmap" / "sparse",
+        "colmap_best": root / "data" / "colmap" / "sparse_best",
         "logs": root / "logs",
         "scripts": root / "scripts",
     }
 
-    for key in ("data", "frames_360", "frames_perspective", "colmap", "colmap_images", "colmap_sparse", "logs", "scripts"):
+    for key in ("data", "frames_360", "frames_perspective", "colmap", "colmap_images", "colmap_sparse", "colmap_best", "logs", "scripts"):
         paths[key].mkdir(parents=True, exist_ok=True)
         logger.debug("Ensured directory exists: %s -> %s", key, paths[key])
 
@@ -112,6 +114,60 @@ def summarize_sparse(paths: dict[str, Path], logger) -> dict:
     return {"count": len(model_dirs), "models": models}
 
 
+def summarize_best_model(paths: dict[str, Path], logger) -> dict:
+    best_txt = paths["colmap"] / "best_model.txt"
+    best_json = paths["colmap"] / "model_inspection.json"
+    sparse_best = paths["colmap_best"]
+
+    result = {
+        "best_model_txt_exists": best_txt.exists(),
+        "model_inspection_json_exists": best_json.exists(),
+        "sparse_best_exists": sparse_best.exists(),
+        "selected_model_name": None,
+        "selected_model_path": None,
+        "registered_images": None,
+        "total_input_images": None,
+        "registration_ratio": None,
+    }
+
+    if best_txt.exists():
+        lines = [line.strip() for line in best_txt.read_text(encoding="utf-8").splitlines() if line.strip()]
+        if len(lines) >= 2:
+            result["selected_model_name"] = lines[0]
+            result["selected_model_path"] = lines[1]
+        for line in lines[2:]:
+            if line.startswith("registered_images="):
+                result["registered_images"] = int(line.split("=", 1)[1])
+            elif line.startswith("total_input_images="):
+                result["total_input_images"] = int(line.split("=", 1)[1])
+            elif line.startswith("registration_ratio="):
+                result["registration_ratio"] = float(line.split("=", 1)[1])
+
+    elif best_json.exists():
+        try:
+            payload = json.loads(best_json.read_text(encoding="utf-8"))
+            best_model = payload.get("best_model")
+            if best_model:
+                result["selected_model_name"] = best_model.get("name")
+                result["selected_model_path"] = best_model.get("path")
+                result["registered_images"] = best_model.get("registered_images")
+                result["total_input_images"] = best_model.get("total_input_images")
+                result["registration_ratio"] = best_model.get("registration_ratio")
+        except Exception as exc:
+            logger.warning("Failed to parse model inspection JSON: %s", exc)
+
+    logger.info("Best model text exists: %s", result["best_model_txt_exists"])
+    logger.info("Model inspection JSON exists: %s", result["model_inspection_json_exists"])
+    logger.info("Sparse best exists: %s", result["sparse_best_exists"])
+    logger.info("Selected best model name: %s", result["selected_model_name"])
+    logger.info("Selected best model path: %s", result["selected_model_path"])
+    logger.info("Best model registered images: %s", result["registered_images"])
+    logger.info("Best model total input images: %s", result["total_input_images"])
+    logger.info("Best model registration ratio: %s", result["registration_ratio"])
+
+    return result
+
+
 def print_report(summary: dict) -> None:
     print("\n=== Pipeline Report ===")
     print(f"360 frames: {summary['frames_360']['count']}")
@@ -126,6 +182,19 @@ def print_report(summary: dict) -> None:
     print(f"Sparse model folders: {summary['sparse']['count']}")
     for model in summary["sparse"]["models"]:
         print(f"  - {model['name']}: files={', '.join(model['files_present'])}")
+
+    best = summary["best_model"]
+    print("\nBest model summary:")
+    print(f"  best_model_txt_exists={best['best_model_txt_exists']}")
+    print(f"  model_inspection_json_exists={best['model_inspection_json_exists']}")
+    print(f"  sparse_best_exists={best['sparse_best_exists']}")
+    print(f"  selected_model_name={best['selected_model_name']}")
+    print(f"  selected_model_path={best['selected_model_path']}")
+    print(f"  registered_images={best['registered_images']}")
+    print(f"  total_input_images={best['total_input_images']}")
+    ratio = best["registration_ratio"]
+    ratio_display = f"{ratio:.2%}" if isinstance(ratio, float) else str(ratio)
+    print(f"  registration_ratio={ratio_display}")
 
 
 def parse_args() -> argparse.Namespace:
@@ -154,6 +223,7 @@ def main() -> int:
             "colmap_images": summarize_colmap_images(paths, logger),
             "database": summarize_colmap_database(paths, logger),
             "sparse": summarize_sparse(paths, logger),
+            "best_model": summarize_best_model(paths, logger),
         }
 
         print_report(summary)
