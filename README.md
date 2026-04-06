@@ -201,7 +201,42 @@ Put a video in `data/input_video/` or pass `--input` to `extract_frames.py`.
 - `run_glomap.py` exists as a separate legacy/experimental utility and is not part of the main scripted pipeline above.
 
 ## TODO: 
+
+### 1
 So the pipeline summary is almost certainly counting a line that merely contains the word error, rather than a real failing condition. That means:
 
 --stop-on-warning is usable
 but the error/warning classification is not trustworthy enough yet for strong automation decisions
+
+### 2
+What I would do next, in order:
+
+Keep using inspect_colmap_models.py as-is. It is working.
+Add a small enhancement so it also prints:
+total input images
+registration ratio for each model
+Then run a few controlled experiments:
+preset indoor_real_estate at h_fov=85
+same preset at h_fov=75
+same preset at h_fov=95
+try single_camera=False
+try a 6-view preset instead of 4-view
+
+A very useful metric for future comparisons is:
+
+registration_ratio = registered_images / total_colmap_images
+
+For this run, that would be about:
+
+100 / 400 = 25%
+
+That is the number I would optimize next.
+
+So my assessment is:
+
+Step 3 works
+best-model selection works
+promotion works
+the next technical challenge is not tooling anymore, it is reconstruction quality tuning
+
+I’d suggest the next refinement be updating inspect_colmap_models.py and pipeline_report.py to include registration ratio and best-model summary automatically, then we tune presets against that metric.
