@@ -1,0 +1,26 @@
+﻿Project summary:
+This is a Windows-oriented Python pipeline for turning a 360 drone or property-tour video into a COLMAP sparse reconstruction suitable for Gaussian splatting workflows.
+
+What is included:
+- Source code under scripts/
+- Main documentation and configuration files
+- Small project metadata files that help explain structure
+
+What was intentionally excluded:
+- Videos and raw media
+- data/, logs/, experiments/ outputs
+- External tool bundles such as COLMAP/, GLOMAP/, and tools/
+- Virtual environments, binaries, and other large/generated files
+
+Important entry points:
+- scripts/pipeline.py: end-to-end orchestrator
+- scripts/extract_frames.py: extracts frames from input video
+- scripts/convert_360_to_views.py: converts equirectangular frames into perspective views
+- scripts/prepare_colmap_images.py: flattens views into COLMAP-ready inputs
+- scripts/run_colmap.py: runs sparse reconstruction
+- scripts/run_experiments.py and scripts/visualize_experiments.py: parameter sweep tooling
+
+Useful context for ChatGPT:
+- The project assumes Windows paths and PowerShell-style commands.
+- FFmpeg and COLMAP are external dependencies and may not be present in the uploaded files.
+- Please analyze the code and configs without assuming the sample media or local tool installations are available.

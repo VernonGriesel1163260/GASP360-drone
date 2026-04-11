@@ -1,0 +1,36 @@
+﻿Included files:
+
+.gitignore
+experiments.yaml
+project_tree.txt
+README.md
+requirements.txt
+run_glomap.py
+scripts\common\__init__.py
+scripts\common\colmap_capabilities.py
+scripts\common\config_merge.py
+scripts\common\logging_utils.py
+scripts\common\presets.py
+scripts\common\workspace.py
+scripts\convert_360_to_views.py
+scripts\extract_frames.py
+scripts\inspect_colmap_models.py
+scripts\pipeline.py
+scripts\pipeline_report.py
+scripts\prepare_colmap_images.py
+scripts\run_brush.py
+scripts\run_colmap.py
+scripts\run_experiments.py
+scripts\visualize_experiments.py
+tools_check.ps1
+
+Excluded on purpose:
+- videos/
+- data/
+- logs/
+- experiments/
+- COLMAP/
+- GLOMAP/
+- tools/
+- .venv/
+- any other large or generated files
