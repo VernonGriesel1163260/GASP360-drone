@@ -851,44 +851,288 @@ python .\scripts\run_colmap.py `
 
 ## Experiments
 
+The experiment runner lets you test multiple pipeline configurations in **isolated workspaces** and compare outcomes afterward.
+
+This is useful when you want to compare:
+
+- different FOV values
+- different presets or view counts
+- different COLMAP matchers or camera models
+- multistream orientation settings for difficult footage
+
+Each experiment gets its own workspace under `base_output_root/<experiment_id>/`, so runs do not overwrite each other.
+
+### When to use experiments
+
+Use experiments when:
+
+- the default pipeline does not produce good perspective views
+- COLMAP registration is weak or unstable
+- you are testing a new camera, container type, or projection layout
+- you want to benchmark different pipeline settings systematically
+
+Avoid running large experiment sweeps on every clip. They can take a long time. In practice, a sweep is most useful for:
+
+- establishing a good default for a new camera/container type
+- troubleshooting unusually difficult footage
+- validating whether a tuning change is actually worth keeping
+
+### How experiment configs work
+
+Experiment configs are written in YAML.
+
+They have two main parts:
+
+- `global`
+  - shared settings used by all experiments
+- `experiments`
+  - one entry per experiment, each with its own `id` and `pipeline_args`
+
+The runner works by appending each experiment's `pipeline_args` to the shared `global.pipeline_args`.
+
+That means any parameter you can pass to `pipeline.py` can also be tested in an experiment.
+
+### Minimal example
+
+```yaml
+global:
+  input_video: "E:/_root/projects/Gaussian Splats/GASP360-drone/data/input_video/your_video.mp4"
+  base_output_root: "E:/_root/projects/Gaussian Splats/GASP360-drone/experiments"
+  python_executable: "E:/_root/projects/Gaussian Splats/GASP360-drone/.venv/Scripts/python.exe"
+
+  pipeline_args:
+    - "--overwrite"
+    - "--clean-extract"
+    - "--clean-convert"
+    - "--clean-prepare"
+    - "--reset-colmap"
+    - "--force-cli"
+    - "--validation-mode"
+
+  inspect_args:
+    - "--summary-json"
+    - "--promote-best"
+
+experiments:
+  - id: "baseline_h85"
+    description: "Baseline indoor run"
+    pipeline_args:
+      - "--preset"
+      - "indoor_real_estate"
+      - "--h-fov"
+      - "85"
+      - "--v-fov"
+      - "85"
+
+  - id: "wide_h95"
+    description: "Wider FOV"
+    pipeline_args:
+      - "--preset"
+      - "indoor_real_estate"
+      - "--h-fov"
+      - "95"
+      - "--v-fov"
+      - "95"
+Example use cases
+1) FOV sweep
+
+Use this when you want to compare narrow, medium, and wide perspective extraction.
+
+experiments:
+  - id: "h75"
+    pipeline_args: ["--preset", "indoor_real_estate", "--h-fov", "75", "--v-fov", "75"]
+
+  - id: "h85"
+    pipeline_args: ["--preset", "indoor_real_estate", "--h-fov", "85", "--v-fov", "85"]
+
+  - id: "h95"
+    pipeline_args: ["--preset", "indoor_real_estate", "--h-fov", "95", "--v-fov", "95"]
+2) Preset or view-count comparison
+
+Use this when a space is tight, repetitive, or difficult to reconstruct.
+
+experiments:
+  - id: "indoor_4view"
+    pipeline_args: ["--preset", "indoor_real_estate"]
+
+  - id: "tight_6view"
+    pipeline_args: ["--preset", "tight_interiors"]
+
+  - id: "corridor_8view"
+    pipeline_args: ["--preset", "corridor_staircase"]
+3) COLMAP matcher or camera model comparison
+
+Use this when projection looks acceptable, but reconstruction is still weak.
+
+experiments:
+  - id: "seq_simple"
+    pipeline_args:
+      - "--preset"
+      - "indoor_real_estate"
+      - "--matcher"
+      - "sequential_matcher"
+      - "--camera-model"
+      - "SIMPLE_RADIAL"
+
+  - id: "exhaustive_pinhole"
+    pipeline_args:
+      - "--preset"
+      - "indoor_real_estate"
+      - "--matcher"
+      - "exhaustive_matcher"
+      - "--camera-model"
+      - "PINHOLE"
+4) Multistream orientation sweep
+
+Use this only for difficult multistream footage, or when setting a reusable default for a specific camera/container type.
+
+global:
+  input_video: "E:/_root/projects/Gaussian Splats/GASP360-drone/data/input_video/DJI_20260328162848_0011_D.OSV"
+  base_output_root: "E:/_root/projects/Gaussian Splats/GASP360-drone/experiments/orientation_sweep"
+  python_executable: "E:/_root/projects/Gaussian Splats/GASP360-drone/.venv/Scripts/python.exe"
+
+  pipeline_args:
+    - "--preset"
+    - "indoor_real_estate"
+    - "--preprocess-mode"
+    - "report-only"
+    - "--extract-use-preprocess-recommendation"
+    - "--target-frames"
+    - "100"
+    - "--overwrite"
+    - "--clean-preprocess"
+    - "--clean-extract"
+    - "--clean-normalize"
+    - "--clean-convert"
+    - "--clean-prepare"
+    - "--reset-colmap"
+    - "--force-cli"
+    - "--validation-mode"
+    - "--input-format"
+    - "dual-fisheye"
+
+experiments:
+  - id: "ori_base"
+    pipeline_args:
+      - "--normalize-multistream-mode"
+      - "explicit"
+      - "--normalize-stream-pair"
+      - "0"
+      - "1"
+      - "--normalize-layout"
+      - "side_by_side_lr"
+
+  - id: "ori_rotb180"
+    pipeline_args:
+      - "--normalize-multistream-mode"
+      - "explicit"
+      - "--normalize-stream-pair"
+      - "0"
+      - "1"
+      - "--normalize-layout"
+      - "side_by_side_lr"
+      - "--normalize-rotate-b"
+      - "180"
+Running experiments
+
 Run all experiments:
 
-```powershell
 python .\scripts\run_experiments.py --config .\experiments.yaml --verbose
-```
 
-Resume later:
+Resume and skip completed experiments:
 
-```powershell
 python .\scripts\run_experiments.py --config .\experiments.yaml --resume --verbose
-```
 
-Run one experiment from conversion onward:
+Run just one experiment:
 
-```powershell
 python .\scripts\run_experiments.py `
   --config .\experiments.yaml `
-  --experiment indoor_h95 `
+  --experiment h95 `
+  --verbose
+
+Run only part of the pipeline for each experiment:
+
+python .\scripts\run_experiments.py `
+  --config .\experiments.yaml `
   --step-from convert_360_to_views `
   --verbose
+Experiment outputs
+
+After a run, expect outputs such as:
+
+experiments/
+  experiments_summary.csv
+  experiments_summary.json
+  <experiment_id>/
+    experiment_status.json
+    workspace_context.json
+    data/
+      ...
 ```
 
-## Visualising Experiment Results
+The summary files combine the key results from all experiment workspaces.
 
-After a matrix run, expect summary files like:
+Typical summary fields include:
 
-```text
-experiments\experiments_summary.csv
-experiments\experiments_summary.json
-```
+- registered images
+- total input images
+- registration ratio
+- points3D
+- observations
+- selected best model
+- failure reason, if any
 
-Generate plots and a markdown summary:
+If normalization metadata is present, experiment summaries can also include:
+
+- selected stream pair
+- resolved layout
+- effective input format
+- orientation signature
+- rotate / flip settings
+
+### How to judge experiment results
+
+For reconstruction-focused comparisons, rank results roughly in this order:
+
+1. registration ratio
+2. registered images
+3. points3D
+4. observations
+
+Then sanity-check the best candidate visually.
+
+A configuration is not automatically better just because one view looks nicer. Prefer the setting that improves reconstruction metrics without introducing obvious seam or reprojection artifacts.
+
+### Visualising experiment results
+
+After a matrix run, generate charts and a Markdown summary:
 
 ```powershell
 python .\scripts\visualize_experiments.py `
   --summary-csv ".\experiments\experiments_summary.csv" `
   --output-dir ".\experiments\_reports"
 ```
+
+This typically produces:
+
+- registration_ratio.png
+- registered_images.png
+- points3d.png
+- observations.png
+- summary.md
+
+### Suggested workflow
+
+For most footage:
+
+1. run the default pipeline first
+2. inspect the views and COLMAP result
+3. only then open an experiment branch if needed
+
+A good practical order is:
+
+1. start with a small FOV or preset sweep
+2. only use multistream orientation sweeps for difficult or camera-specific edge cases
 
 ## Brush
 

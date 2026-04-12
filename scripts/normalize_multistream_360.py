@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,6 +20,7 @@ PREPROCESS_METADATA_FILENAME = "_preprocess_metadata.json"
 EXTRACTION_METADATA_FILENAME = "_extraction_metadata.json"
 NORMALIZATION_METADATA_FILENAME = "_normalization_metadata.json"
 IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
+
 OUTPUT_FORMAT_ALIASES = {
     "dual-fisheye": "dfisheye",
     "dual_fisheye": "dfisheye",
@@ -28,6 +28,7 @@ OUTPUT_FORMAT_ALIASES = {
     "fisheye_pair": "dfisheye",
     "flat": "flat",
 }
+
 LAYOUT_CHOICES = {"auto", "side_by_side_lr", "side_by_side_rl", "top_bottom_tb", "top_bottom_bt"}
 ROTATE_CHOICES = {0, 90, 180, 270}
 
@@ -127,10 +128,12 @@ def remove_previous_outputs(frames_root: Path, output_prefix: str, metadata_path
         image_path.unlink()
         removed += 1
         logger.debug("Deleted old normalized frame: %s", image_path)
+
     if metadata_path.exists():
         metadata_path.unlink()
         removed += 1
         logger.debug("Deleted old normalization metadata: %s", metadata_path)
+
     return removed
 
 
@@ -190,7 +193,6 @@ def select_stream_pair(
     return ordered, "first_two_available_streams", recommendation
 
 
-
 def infer_output_format(
     explicit_output_format: str,
     preprocess_payload: dict | None,
@@ -212,7 +214,6 @@ def infer_output_format(
     if all(fmt == "fisheye" for fmt in pair_formats):
         return "dfisheye", "auto_from_preprocess_pair_formats"
 
-    # Fallback heuristic: if both source frames are square, dual-fisheye is a sensible normalized representation.
     sizes = []
     for item in selected_pair:
         frame_files = item["frame_files"]
@@ -220,12 +221,12 @@ def infer_output_format(
             continue
         with Image.open(frame_files[0]) as img:
             sizes.append(img.size)
+
     if len(sizes) == 2 and sizes[0][0] == sizes[0][1] and sizes[1][0] == sizes[1][1]:
         return "dfisheye", "auto_from_square_source_frames"
 
     logger.warning("Could not confidently infer normalized output format; falling back to flat.")
     return "flat", "auto_fallback_flat"
-
 
 
 def resolve_layout(explicit_layout: str, resolved_output_format: str) -> tuple[str, str]:
@@ -234,7 +235,6 @@ def resolve_layout(explicit_layout: str, resolved_output_format: str) -> tuple[s
     if resolved_output_format == "dfisheye":
         return "side_by_side_lr", "auto_for_dfisheye"
     return "side_by_side_lr", "auto_default"
-
 
 
 def apply_transforms(
@@ -247,14 +247,12 @@ def apply_transforms(
     if rotate_deg not in ROTATE_CHOICES:
         raise ValueError(f"rotate_deg must be one of {sorted(ROTATE_CHOICES)}, got {rotate_deg}")
     if rotate_deg:
-        # Pillow rotate is counter-clockwise; expand keeps full content.
         result = result.rotate(rotate_deg, expand=True)
     if flip_h:
         result = ImageOps.mirror(result)
     if flip_v:
         result = ImageOps.flip(result)
     return result
-
 
 
 def harmonize_sizes(image_a: Image.Image, image_b: Image.Image, resize_mode: str) -> tuple[Image.Image, Image.Image, str | None]:
@@ -276,7 +274,6 @@ def harmonize_sizes(image_a: Image.Image, image_b: Image.Image, resize_mode: str
     image_a_resized = image_a.resize(target_size, Image.Resampling.LANCZOS) if image_a.size != target_size else image_a
     image_b_resized = image_b.resize(target_size, Image.Resampling.LANCZOS) if image_b.size != target_size else image_b
     return image_a_resized, image_b_resized, f"resized_to_{target_size[0]}x{target_size[1]}_{resize_mode}"
-
 
 
 def compose_pair(image_a: Image.Image, image_b: Image.Image, layout: str) -> Image.Image:
@@ -312,7 +309,6 @@ def compose_pair(image_a: Image.Image, image_b: Image.Image, layout: str) -> Ima
     raise ValueError(f"Unsupported layout: {layout}")
 
 
-
 def list_matched_pairs(stream_a: dict, stream_b: dict, logger) -> list[tuple[Path, Path]]:
     files_a = {p.name: p for p in stream_a["frame_files"]}
     files_b = {p.name: p for p in stream_b["frame_files"]}
@@ -330,7 +326,6 @@ def list_matched_pairs(stream_a: dict, stream_b: dict, logger) -> list[tuple[Pat
     return [(files_a[name], files_b[name]) for name in common_names]
 
 
-
 def derive_output_name(source_name: str, output_prefix: str, fallback_index: int) -> str:
     source_path = Path(source_name)
     match = re.search(r"_(\d+)$", source_path.stem)
@@ -338,10 +333,24 @@ def derive_output_name(source_name: str, output_prefix: str, fallback_index: int
     return f"{output_prefix}_{suffix}.jpg"
 
 
-
 def count_flat_frames(frames_root: Path, output_prefix: str) -> int:
     return sum(1 for p in frames_root.glob(f"{output_prefix}_*.jpg") if p.is_file())
 
+
+def _bool01(value: bool) -> str:
+    return "1" if value else "0"
+
+
+def build_orientation_signature(
+    selected_pair: list[dict],
+    resolved_layout: str,
+    args,
+) -> str:
+    pair_part = f"pair_{selected_pair[0]['stream_index']:02d}_{selected_pair[1]['stream_index']:02d}"
+    layout_part = f"layout_{resolved_layout}"
+    a_part = f"a_r{args.rotate_a}_fh{_bool01(args.flip_h_a)}_fv{_bool01(args.flip_v_a)}"
+    b_part = f"b_r{args.rotate_b}_fh{_bool01(args.flip_h_b)}_fv{_bool01(args.flip_v_b)}"
+    return "__".join([pair_part, layout_part, a_part, b_part])
 
 
 def parse_args() -> argparse.Namespace:
@@ -366,7 +375,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--clean", action="store_true")
     parser.add_argument("--verbose", action="store_true")
     return parser.parse_args()
-
 
 
 def main() -> int:
@@ -415,10 +423,12 @@ def main() -> int:
 
         output_prefix_default = extraction_payload.get("frame_prefix") if extraction_payload else "frame360"
         output_prefix = resolve_output_prefix(args.output_prefix, output_prefix_default)
+        orientation_signature = build_orientation_signature(selected_pair, resolved_layout, args)
 
         logger.info("Resolved normalized output format: %s (%s)", resolved_output_format, output_format_source)
         logger.info("Resolved normalized layout: %s (%s)", resolved_layout, layout_source)
         logger.info("Output prefix: %s", output_prefix)
+        logger.info("Orientation signature: %s", orientation_signature)
 
         if args.clean:
             removed = remove_previous_outputs(paths["frames_360"], output_prefix, paths["normalization_metadata"], logger)
@@ -474,7 +484,7 @@ def main() -> int:
         effective_convert_input_format = "dual-fisheye" if resolved_output_format == "dfisheye" else resolved_output_format
 
         normalization_payload = {
-            "schema_version": 1,
+            "schema_version": 2,
             "created_utc": datetime.now(timezone.utc).isoformat(),
             "source_script": SCRIPT_NAME,
             "mode": args.mode,
@@ -504,6 +514,7 @@ def main() -> int:
                 "stream_a": {"rotate": args.rotate_a, "flip_h": args.flip_h_a, "flip_v": args.flip_v_a},
                 "stream_b": {"rotate": args.rotate_b, "flip_h": args.flip_h_b, "flip_v": args.flip_v_b},
             },
+            "orientation_signature": orientation_signature,
             "outputs_preview": output_records[:10],
             "notes": [
                 "Normalized multistream frames are written into data/frames_360 as a flat frame set so convert_360_to_views.py can consume them.",
@@ -521,6 +532,7 @@ def main() -> int:
         print(f"Selected pair: {[item['stream_index'] for item in selected_pair]}")
         print(f"Resolved output format: {resolved_output_format}")
         print(f"Resolved layout: {resolved_layout}")
+        print(f"Orientation signature: {orientation_signature}")
         print(f"Effective convert input format: {effective_convert_input_format}")
         print(f"Output prefix: {output_prefix}")
         print(f"Normalized frame count: {output_frame_count}")

@@ -12,7 +12,6 @@ from typing import Any
 
 import yaml
 
-# Make ./scripts importable when running:
 sys.path.append(str(Path(__file__).resolve().parent))
 
 from common.logging_utils import setup_logger
@@ -87,93 +86,6 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
-def collect_experiment_summary(workspace_root: Path, experiment_id: str) -> dict[str, Any]:
-    colmap_dir = workspace_root / "data" / "colmap"
-    inspection_path = colmap_dir / "model_inspection.json"
-    best_txt = colmap_dir / "best_model.txt"
-    failure_reason_path = colmap_dir / "colmap_failure_reason.txt"
-    status = load_experiment_status(workspace_root)
-
-    payload = {
-        "experiment_id": experiment_id,
-        "workspace_root": str(workspace_root),
-        "selected_model_name": None,
-        "selected_model_path": None,
-        "registered_images": None,
-        "total_input_images": None,
-        "registration_ratio": None,
-        "points3D": None,
-        "observations": None,
-        "best_model_found": False,
-        "failure_reason": None,
-    }
-
-    if failure_reason_path.exists():
-        failure_reason = failure_reason_path.read_text(encoding="utf-8").strip()
-        if failure_reason:
-            payload["failure_reason"] = failure_reason
-
-    inspection = read_json_if_exists(inspection_path)
-    if inspection and inspection.get("best_model"):
-        best = inspection["best_model"]
-        payload["selected_model_name"] = best.get("name")
-        payload["selected_model_path"] = best.get("path")
-        payload["registered_images"] = best.get("registered_images")
-        payload["total_input_images"] = best.get("total_input_images")
-        payload["registration_ratio"] = best.get("registration_ratio")
-        payload["points3D"] = best.get("points3D")
-        payload["observations"] = best.get("observations")
-        payload["best_model_found"] = True
-        payload["failure_reason"] = None
-        return payload
-
-    if best_txt.exists():
-        lines = [line.strip() for line in best_txt.read_text(encoding="utf-8").splitlines() if line.strip()]
-        if len(lines) >= 2:
-            payload["selected_model_name"] = lines[0]
-            payload["selected_model_path"] = lines[1]
-            payload["best_model_found"] = True
-            payload["failure_reason"] = None
-
-    if payload["failure_reason"] is None:
-        state = status.get("state")
-        if isinstance(state, str) and state.startswith("failed_"):
-            exit_code = status.get("last_exit_code")
-            if exit_code is None:
-                payload["failure_reason"] = f"{state}"
-            else:
-                payload["failure_reason"] = f"{state} (exit_code={exit_code})"
-
-    return payload
-
-
-def write_master_summary(base_output_root: Path, rows: list[dict[str, Any]]) -> None:
-    json_path = base_output_root / "experiments_summary.json"
-    csv_path = base_output_root / "experiments_summary.csv"
-
-    json_path.write_text(json.dumps(rows, indent=2), encoding="utf-8")
-
-    fieldnames = [
-        "experiment_id",
-        "workspace_root",
-        "selected_model_name",
-        "selected_model_path",
-        "registered_images",
-        "total_input_images",
-        "registration_ratio",
-        "points3D",
-        "observations",
-        "best_model_found",
-        "failure_reason",
-    ]
-
-    with csv_path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(row)
-
-
 def experiment_status_path(workspace_root: Path) -> Path:
     return workspace_root / "experiment_status.json"
 
@@ -242,10 +154,120 @@ def build_report_command(
     return cmd
 
 
+def collect_experiment_summary(workspace_root: Path, experiment_id: str) -> dict[str, Any]:
+    colmap_dir = workspace_root / "data" / "colmap"
+    inspection_path = colmap_dir / "model_inspection.json"
+    best_txt = colmap_dir / "best_model.txt"
+    failure_reason_path = colmap_dir / "colmap_failure_reason.txt"
+    context_path = workspace_root / "workspace_context.json"
+    context = read_json_if_exists(context_path) or read_json_if_exists(workspace_root / "data" / "workspace_context.json") or {}
+    status = load_experiment_status(workspace_root)
+
+    normalization = context.get("normalization") or {}
+    metrics = context.get("metrics") or {}
+
+    payload = {
+        "experiment_id": experiment_id,
+        "workspace_root": str(workspace_root),
+        "selected_model_name": None,
+        "selected_model_path": None,
+        "registered_images": metrics.get("registered_images"),
+        "total_input_images": metrics.get("total_input_images"),
+        "registration_ratio": metrics.get("registration_ratio"),
+        "points3D": metrics.get("points3D"),
+        "observations": metrics.get("observations"),
+        "best_model_found": False,
+        "failure_reason": None,
+        "normalize_selected_pair": ",".join(str(v) for v in (normalization.get("selected_pair") or [])),
+        "normalize_resolved_layout": normalization.get("resolved_layout"),
+        "normalize_effective_convert_input_format": normalization.get("effective_convert_input_format"),
+        "normalize_orientation_signature": normalization.get("orientation_signature"),
+        "normalize_rotate_a": ((normalization.get("transforms") or {}).get("stream_a") or {}).get("rotate"),
+        "normalize_flip_h_a": ((normalization.get("transforms") or {}).get("stream_a") or {}).get("flip_h"),
+        "normalize_flip_v_a": ((normalization.get("transforms") or {}).get("stream_a") or {}).get("flip_v"),
+        "normalize_rotate_b": ((normalization.get("transforms") or {}).get("stream_b") or {}).get("rotate"),
+        "normalize_flip_h_b": ((normalization.get("transforms") or {}).get("stream_b") or {}).get("flip_h"),
+        "normalize_flip_v_b": ((normalization.get("transforms") or {}).get("stream_b") or {}).get("flip_v"),
+    }
+
+    if failure_reason_path.exists():
+        failure_reason = failure_reason_path.read_text(encoding="utf-8").strip()
+        if failure_reason:
+            payload["failure_reason"] = failure_reason
+
+    inspection = read_json_if_exists(inspection_path)
+    if inspection and inspection.get("best_model"):
+        best = inspection["best_model"]
+        payload["selected_model_name"] = best.get("name")
+        payload["selected_model_path"] = best.get("path")
+        payload["registered_images"] = best.get("registered_images", payload["registered_images"])
+        payload["total_input_images"] = best.get("total_input_images", payload["total_input_images"])
+        payload["registration_ratio"] = best.get("registration_ratio", payload["registration_ratio"])
+        payload["points3D"] = best.get("points3D", payload["points3D"])
+        payload["observations"] = best.get("observations", payload["observations"])
+        payload["best_model_found"] = True
+        payload["failure_reason"] = None
+        return payload
+
+    if best_txt.exists():
+        lines = [line.strip() for line in best_txt.read_text(encoding="utf-8").splitlines() if line.strip()]
+        if len(lines) >= 2:
+            payload["selected_model_name"] = lines[0]
+            payload["selected_model_path"] = lines[1]
+            payload["best_model_found"] = True
+            payload["failure_reason"] = None
+
+    if payload["failure_reason"] is None:
+        state = status.get("state")
+        if isinstance(state, str) and state.startswith("failed_"):
+            exit_code = status.get("last_exit_code")
+            if exit_code is None:
+                payload["failure_reason"] = state
+            else:
+                payload["failure_reason"] = f"{state} (exit_code={exit_code})"
+
+    return payload
+
+
+def write_master_summary(base_output_root: Path, rows: list[dict[str, Any]]) -> None:
+    json_path = base_output_root / "experiments_summary.json"
+    csv_path = base_output_root / "experiments_summary.csv"
+
+    json_path.write_text(json.dumps(rows, indent=2), encoding="utf-8")
+
+    fieldnames = [
+        "experiment_id",
+        "workspace_root",
+        "selected_model_name",
+        "selected_model_path",
+        "registered_images",
+        "total_input_images",
+        "registration_ratio",
+        "points3D",
+        "observations",
+        "best_model_found",
+        "failure_reason",
+        "normalize_selected_pair",
+        "normalize_resolved_layout",
+        "normalize_effective_convert_input_format",
+        "normalize_orientation_signature",
+        "normalize_rotate_a",
+        "normalize_flip_h_a",
+        "normalize_flip_v_a",
+        "normalize_rotate_b",
+        "normalize_flip_h_b",
+        "normalize_flip_v_b",
+    ]
+
+    with csv_path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+
+
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Run a resumable experiment matrix using isolated workspaces."
-    )
+    parser = argparse.ArgumentParser(description="Run a resumable experiment matrix using isolated workspaces.")
     parser.add_argument("--config", type=str, required=True)
     parser.add_argument("--experiment", type=str, default=None, help="Run only one experiment id.")
     parser.add_argument("--step-from", type=str, default=None)
@@ -276,6 +298,7 @@ def main() -> int:
         if input_video and not input_video_path.exists():
             logger.error("Configured input video does not exist: %s", input_video_path)
             return 1
+
         pipeline_args = list(global_cfg.get("pipeline_args", []))
         inspect_args = list(global_cfg.get("inspect_args", ["--summary-json", "--promote-best"]))
 
@@ -300,8 +323,7 @@ def main() -> int:
             status = load_experiment_status(workspace_root)
             if args.resume and status.get("state") == "done":
                 logger.info("Skipping completed experiment: %s", exp_id)
-                row = collect_experiment_summary(workspace_root, exp_id)
-                all_rows.append(row)
+                all_rows.append(collect_experiment_summary(workspace_root, exp_id))
                 continue
 
             logger.info("=== Experiment: %s ===", exp_id)
@@ -440,18 +462,15 @@ def main() -> int:
 
             row = collect_experiment_summary(workspace_root, exp_id)
             all_rows.append(row)
-
             write_master_summary(base_output_root, all_rows)
 
-        # refresh rows from all completed experiment folders
         final_rows: list[dict[str, Any]] = []
         for exp in experiments:
             exp_id = exp["id"]
             if args.experiment and exp_id != args.experiment:
                 continue
             workspace_root = base_output_root / exp_id
-            row = collect_experiment_summary(workspace_root, exp_id)
-            final_rows.append(row)
+            final_rows.append(collect_experiment_summary(workspace_root, exp_id))
 
         write_master_summary(base_output_root, final_rows)
         logger.info("Experiment matrix completed")

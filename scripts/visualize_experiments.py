@@ -51,20 +51,30 @@ def plot_bar(labels: list[str], values: list[float], title: str, ylabel: str, ou
 
 
 def write_markdown_summary(rows: list[dict[str, Any]], out_path: Path) -> None:
+    sorted_rows = sorted(
+        rows,
+        key=lambda r: (
+            to_float(r.get("registration_ratio"), default=-1.0),
+            to_int(r.get("registered_images"), default=-1),
+            to_int(r.get("points3D"), default=-1),
+            to_int(r.get("observations"), default=-1),
+        ),
+        reverse=True,
+    )
+
     lines = [
         "# Experiment Summary",
         "",
-        "| Experiment | Best Model Found | Registered Images | Total Input Images | Registration Ratio | Points3D | Observations |",
-        "|---|---:|---:|---:|---:|---:|---:|",
+        "| Experiment | Best Model Found | Registered Images | Total Input Images | Registration Ratio | Points3D | Observations | Pair | Layout | Orientation Signature | Failure Reason |",
+        "|---|---:|---:|---:|---:|---:|---:|---|---|---|---|",
     ]
 
-    for row in rows:
+    for row in sorted_rows:
         experiment_id = row.get("experiment_id", "")
         best_model_found = row.get("best_model_found", "")
         registered_images = row.get("registered_images", "")
         total_input_images = row.get("total_input_images", "")
         registration_ratio = row.get("registration_ratio", "")
-
         if registration_ratio not in (None, ""):
             try:
                 registration_ratio = f"{float(registration_ratio) * 100.0:.2f}%"
@@ -73,10 +83,15 @@ def write_markdown_summary(rows: list[dict[str, Any]], out_path: Path) -> None:
 
         points3d = row.get("points3D", "")
         observations = row.get("observations", "")
+        pair = row.get("normalize_selected_pair", "")
+        layout = row.get("normalize_resolved_layout", "")
+        orientation_signature = row.get("normalize_orientation_signature", "")
+        failure_reason = row.get("failure_reason", "") or ""
 
         lines.append(
             f"| {experiment_id} | {best_model_found} | {registered_images} | "
-            f"{total_input_images} | {registration_ratio} | {points3d} | {observations} |"
+            f"{total_input_images} | {registration_ratio} | {points3d} | {observations} | "
+            f"{pair} | {layout} | {orientation_signature} | {failure_reason} |"
         )
 
     out_path.write_text("\n".join(lines), encoding="utf-8")
