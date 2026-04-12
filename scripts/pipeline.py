@@ -230,12 +230,17 @@ def build_convert_views_cmd(paths: dict[str, Path], args, python_exe: str) -> li
     ]
 
     append_optional_value(cmd, "--input-prefix", args.frame_prefix)
+    append_optional_value(cmd, "--input-format", args.input_format)
+    append_optional_value(cmd, "--input-h-fov", args.input_h_fov)
+    append_optional_value(cmd, "--input-v-fov", args.input_v_fov)
+    append_optional_value(cmd, "--input-d-fov", args.input_d_fov)
 
     if args.views:
         cmd.extend(["--views", *args.views])
 
     append_optional_value(cmd, "--h-fov", args.h_fov)
     append_optional_value(cmd, "--v-fov", args.v_fov)
+    append_optional_value(cmd, "--d-fov", args.d_fov)
     append_optional_value(cmd, "--width", args.view_width)
     append_optional_value(cmd, "--height", args.view_height)
     append_optional_value(cmd, "--pitch", args.pitch)
@@ -425,9 +430,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--clean-extract", action="store_true")
 
     # Step 2
+    parser.add_argument(
+        "--input-format",
+        type=str,
+        default=None,
+        help="Input projection format for FFmpeg v360, for example auto, equirect, fisheye, dual-fisheye, flat/plain, eac, cubemap.",
+    )
+    parser.add_argument("--input-h-fov", type=float, default=None)
+    parser.add_argument("--input-v-fov", type=float, default=None)
+    parser.add_argument("--input-d-fov", type=float, default=None)
     parser.add_argument("--views", nargs="+", default=None)
     parser.add_argument("--h-fov", type=float, default=None)
     parser.add_argument("--v-fov", type=float, default=None)
+    parser.add_argument("--d-fov", type=float, default=None)
     parser.add_argument("--view-width", type=int, default=None)
     parser.add_argument("--view-height", type=int, default=None)
     parser.add_argument("--pitch", type=float, default=None)

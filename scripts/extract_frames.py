@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -12,6 +13,23 @@ from common.workspace import resolve_code_root, resolve_workspace_root
 
 
 SCRIPT_NAME = "extract_frames"
+SUPPORTED_VIDEO_EXTENSIONS = {
+    ".mp4",
+    ".mov",
+    ".mkv",
+    ".avi",
+    ".m4v",
+    ".webm",
+    ".wmv",
+    ".mpg",
+    ".mpeg",
+    ".ts",
+    ".mts",
+    ".m2ts",
+    ".insv",
+    ".osv",
+    ".360",
+}
 
 
 def code_root_from_script() -> Path:
@@ -58,10 +76,15 @@ def find_ffmpeg(code_root: Path) -> Path:
         if candidate.exists():
             return candidate
 
+    ffmpeg_on_path = shutil.which("ffmpeg")
+    if ffmpeg_on_path:
+        return Path(ffmpeg_on_path)
+
     raise FileNotFoundError(
         "FFmpeg was not found. Expected one of:\n"
         f"  - {code_root / 'tools' / 'ffmpeg' / 'bin' / 'ffmpeg.exe'}\n"
-        f"  - {code_root / 'tools' / 'ffmpeg.exe'}"
+        f"  - {code_root / 'tools' / 'ffmpeg.exe'}\n"
+        "  - ffmpeg on PATH"
     )
 
 
@@ -69,6 +92,10 @@ def find_ffprobe(ffmpeg_path: Path) -> Path | None:
     local_ffprobe = ffmpeg_path.parent / "ffprobe.exe"
     if local_ffprobe.exists():
         return local_ffprobe
+
+    ffprobe_on_path = shutil.which("ffprobe")
+    if ffprobe_on_path:
+        return Path(ffprobe_on_path)
 
     return None
 
@@ -205,19 +232,77 @@ def clear_existing_frames(output_dir: Path, prefix: str, logger) -> int:
 
 
 def find_default_input_video(input_dir: Path) -> Path:
-    video_exts = {".mp4", ".mov", ".mkv", ".avi", ".m4v"}
     videos = sorted(
         p for p in input_dir.iterdir()
-        if p.is_file() and p.suffix.lower() in video_exts
+        if p.is_file() and p.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS
     )
 
     if not videos:
+        supported = ", ".join(sorted(SUPPORTED_VIDEO_EXTENSIONS))
         raise FileNotFoundError(
-            f"No video files found in {input_dir}. "
+            f"No supported video files found in {input_dir}. "
+            f"Supported extensions: {supported}. "
             "Place your source video there or pass --input."
         )
 
     return videos[0]
+
+
+def list_supported_videos(input_dir: Path) -> list[Path]:
+    return sorted(
+        p for p in input_dir.iterdir()
+        if p.is_file() and p.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS
+    )
+
+
+def resolve_input_video(
+    input_arg: str,
+    workspace_root: Path,
+    input_dir: Path,
+) -> Path:
+    raw = Path(input_arg).expanduser()
+
+    candidate_bases: list[Path] = []
+
+    if raw.is_absolute():
+        candidate_bases.append(raw)
+    else:
+        candidate_bases.extend(
+            [
+                raw,
+                Path.cwd() / raw,
+                workspace_root / raw,
+                input_dir / raw,
+            ]
+        )
+
+    seen: set[Path] = set()
+    candidates: list[Path] = []
+
+    for base in candidate_bases:
+        try:
+            resolved = base.resolve(strict=False)
+        except Exception:
+            resolved = base
+
+        if resolved not in seen:
+            seen.add(resolved)
+            candidates.append(resolved)
+
+        # If the caller omitted the extension, try known video extensions.
+        if resolved.suffix == "":
+            for ext in sorted(SUPPORTED_VIDEO_EXTENSIONS):
+                with_ext = resolved.with_suffix(ext)
+                if with_ext not in seen:
+                    seen.add(with_ext)
+                    candidates.append(with_ext)
+
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_file():
+            return candidate
+
+    # Return the most sensible normalized path for error reporting.
+    return candidates[0]
 
 
 def parse_args() -> argparse.Namespace:
@@ -310,13 +395,31 @@ def main() -> int:
         else:
             logger.warning("ffprobe was not found; target-frame mode will not work")
 
+        available_videos = list_supported_videos(paths["input_video"])
+
         if args.input:
-            input_video = Path(args.input).expanduser().resolve()
+            input_video = resolve_input_video(
+                input_arg=args.input,
+                workspace_root=workspace_root,
+                input_dir=paths["input_video"],
+            )
         else:
             input_video = find_default_input_video(paths["input_video"])
 
         if not input_video.exists():
             logger.error("Input video not found: %s", input_video)
+
+            if available_videos:
+                logger.info("Supported videos currently found in %s:", paths["input_video"])
+                for video_path in available_videos:
+                    logger.info(" - %s", video_path.name)
+            else:
+                logger.info(
+                    "No supported videos found in %s. Supported extensions: %s",
+                    paths["input_video"],
+                    ", ".join(sorted(SUPPORTED_VIDEO_EXTENSIONS)),
+                )
+
             return 1
 
         logger.info("Input video: %s", input_video)
@@ -361,13 +464,10 @@ def main() -> int:
 
         run_command_streaming(cmd, logger, verbose=args.verbose)
 
-        extracted = sorted(output_dir.glob(f"{args.prefix}_*.jpg"))
-        logger.info("Extracted %s frame(s) to %s", len(extracted), output_dir)
-
-        for frame in extracted[:5]:
-            logger.info("Sample output: %s", frame.name)
-
+        extracted_files = sorted(output_dir.glob(f"{args.prefix}_*.jpg"))
         logger.info("Extraction completed successfully")
+        logger.info("Extracted %s frame(s)", len(extracted_files))
+
         return 0
 
     except Exception as exc:

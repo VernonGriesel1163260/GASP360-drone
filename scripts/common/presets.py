@@ -3,6 +3,7 @@ from __future__ import annotations
 SCENARIO_PRESETS = {
     "indoor_real_estate": {
         "projection": {
+            "input_format": "auto",
             "views": ["front", "right", "back", "left"],
             "view_yaws": {
                 "front": 0,

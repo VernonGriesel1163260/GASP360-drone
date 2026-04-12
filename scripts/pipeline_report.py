@@ -14,6 +14,7 @@ from common.workspace import resolve_workspace_root
 
 
 SCRIPT_NAME = "pipeline_report"
+PROJECTION_METADATA_FILENAME = "_projection_metadata.json"
 
 
 def project_root_from_script() -> Path:
@@ -54,10 +55,81 @@ def file_size_mb(path: Path) -> float:
     return path.stat().st_size / (1024 * 1024)
 
 
+def load_json_file(path: Path, logger) -> dict | None:
+    if not path.exists() or not path.is_file():
+        return None
+
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.warning("Failed to parse JSON file %s: %s", path, exc)
+        return None
+
+
+def summarize_projection_metadata(paths: dict[str, Path], logger) -> dict:
+    metadata_path = paths["frames_360"] / PROJECTION_METADATA_FILENAME
+    payload = load_json_file(metadata_path, logger)
+
+    summary = {
+        "exists": metadata_path.exists(),
+        "path": str(metadata_path),
+        "requested_input_format": None,
+        "resolved_input_format": None,
+        "detection_mode": None,
+        "input_frame_count": None,
+        "sample_frame_name": None,
+        "confidence": None,
+        "output_views": [],
+        "output_view_count": None,
+        "output_width": None,
+        "output_height": None,
+        "metrics": None,
+        "raw": payload,
+    }
+
+    if not payload:
+        logger.info("Projection metadata sidecar exists: %s", summary["exists"])
+        return summary
+
+    auto_detection = payload.get("auto_detection") or {}
+    output_projection = payload.get("output_projection") or {}
+
+    summary.update(
+        {
+            "requested_input_format": payload.get("requested_input_format"),
+            "resolved_input_format": payload.get("resolved_input_format"),
+            "detection_mode": payload.get("detection_mode"),
+            "input_frame_count": payload.get("input_frame_count"),
+            "sample_frame_name": auto_detection.get("sample_frame_name"),
+            "confidence": auto_detection.get("confidence"),
+            "output_views": output_projection.get("views") or [],
+            "output_view_count": len(output_projection.get("views") or []),
+            "output_width": output_projection.get("width"),
+            "output_height": output_projection.get("height"),
+            "metrics": auto_detection.get("metrics"),
+        }
+    )
+
+    logger.info("Projection metadata sidecar exists: %s", summary["exists"])
+    logger.info("Projection metadata requested input format: %s", summary["requested_input_format"])
+    logger.info("Projection metadata resolved input format: %s", summary["resolved_input_format"])
+    logger.info("Projection metadata detection mode: %s", summary["detection_mode"])
+    logger.info("Projection metadata input frame count: %s", summary["input_frame_count"])
+    logger.info("Projection metadata sample frame: %s", summary["sample_frame_name"])
+    logger.info("Projection metadata confidence: %s", summary["confidence"])
+    logger.info("Projection metadata output views: %s", summary["output_views"])
+    logger.info("Projection metadata output size: %sx%s", summary["output_width"], summary["output_height"])
+
+    return summary
+
+
 def summarize_frames_360(paths: dict[str, Path], logger) -> dict:
     count = count_images(paths["frames_360"])
+    preview = []
+    if paths["frames_360"].exists():
+        preview = [p.name for p in sorted(paths["frames_360"].iterdir()) if p.is_file() and p.suffix.lower() in {".jpg", ".jpeg", ".png"}][:10]
     logger.info("360 frames count: %s", count)
-    return {"count": count}
+    return {"count": count, "preview": preview}
 
 
 def summarize_perspective(paths: dict[str, Path], logger) -> dict:
@@ -228,6 +300,17 @@ def write_workspace_context(paths: dict[str, Path], summary: dict, logger) -> No
             "total_input_images": best["total_input_images"],
             "registration_ratio": best["registration_ratio"],
         },
+        "projection": {
+            "metadata_sidecar": summary["projection_metadata"].get("path"),
+            "requested_input_format": summary["projection_metadata"].get("requested_input_format"),
+            "resolved_input_format": summary["projection_metadata"].get("resolved_input_format"),
+            "detection_mode": summary["projection_metadata"].get("detection_mode"),
+            "sample_frame_name": summary["projection_metadata"].get("sample_frame_name"),
+            "confidence": summary["projection_metadata"].get("confidence"),
+            "output_views": summary["projection_metadata"].get("output_views"),
+            "output_width": summary["projection_metadata"].get("output_width"),
+            "output_height": summary["projection_metadata"].get("output_height"),
+        },
         "brush": {
             "dataset_root_hint": str(paths["colmap"]),
             "prepared_input_root": str(paths["data"] / "brush" / "input_colmap"),
@@ -263,6 +346,7 @@ def main() -> int:
 
         summary = {
             "frames_360": summarize_frames_360(paths, logger),
+            "projection_metadata": summarize_projection_metadata(paths, logger),
             "perspective": summarize_perspective(paths, logger),
             "colmap_images": summarize_colmap_images(paths, logger),
             "database": summarize_colmap_database(paths, logger),

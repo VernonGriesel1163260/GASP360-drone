@@ -1,0 +1,41 @@
+{
+  "workspace_root": "E:\\_root\\projects\\Gaussian Splats\\GASP360-drone",
+  "data_root": "E:\\_root\\projects\\Gaussian Splats\\GASP360-drone\\data",
+  "dataset_type": "colmap",
+  "colmap": {
+    "root": "E:\\_root\\projects\\Gaussian Splats\\GASP360-drone\\data\\colmap",
+    "images": "E:\\_root\\projects\\Gaussian Splats\\GASP360-drone\\data\\colmap\\images",
+    "database": "E:\\_root\\projects\\Gaussian Splats\\GASP360-drone\\data\\colmap\\database.db",
+    "sparse_root": "E:\\_root\\projects\\Gaussian Splats\\GASP360-drone\\data\\colmap\\sparse",
+    "sparse_best": "E:\\_root\\projects\\Gaussian Splats\\GASP360-drone\\data\\colmap\\sparse_best",
+    "best_model_name": null,
+    "best_model_path": null,
+    "best_model_found": false
+  },
+  "metrics": {
+    "registered_images": null,
+    "total_input_images": null,
+    "registration_ratio": null
+  },
+  "projection": {
+    "metadata_sidecar": "E:\\_root\\projects\\Gaussian Splats\\GASP360-drone\\data\\frames_360\\_projection_metadata.json",
+    "requested_input_format": "auto",
+    "resolved_input_format": "fisheye",
+    "detection_mode": "auto",
+    "sample_frame_name": "frame360_0001.jpg",
+    "confidence": 0.82,
+    "output_views": [
+      "front",
+      "right",
+      "back",
+      "left"
+    ],
+    "output_width": 1280,
+    "output_height": 1280
+  },
+  "brush": {
+    "dataset_root_hint": "E:\\_root\\projects\\Gaussian Splats\\GASP360-drone\\data\\colmap",
+    "prepared_input_root": "E:\\_root\\projects\\Gaussian Splats\\GASP360-drone\\data\\brush\\input_colmap",
+    "output_root": "E:\\_root\\projects\\Gaussian Splats\\GASP360-drone\\data\\brush"
+  }
+}
