@@ -20,11 +20,26 @@ from common.presets import DEFAULT_PRESET_NAME, get_preset, get_preset_names
 SCRIPT_NAME = "pipeline"
 
 STEP_ORDER = [
+    "preprocess_input_video",
     "extract_frames",
+    "normalize_multistream_360",
     "convert_360_to_views",
     "prepare_colmap_images",
     "run_colmap",
 ]
+
+EXTRACTION_METADATA_FILENAME = "_extraction_metadata.json"
+NORMALIZATION_METADATA_FILENAME = "_normalization_metadata.json"
+
+
+def load_json_file(path: Path) -> dict | None:
+    if not path.exists() or not path.is_file():
+        return None
+    try:
+        import json
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
 
 WARNING_PATTERNS = [
     re.compile(r"\bwarning\b", re.IGNORECASE),
@@ -68,7 +83,9 @@ def ensure_dirs(code_root: Path, workspace_root: Path, logger) -> dict[str, Path
         "colmap_sparse": workspace_root / "data" / "colmap" / "sparse",
         "logs": workspace_root / "logs",
         "scripts": code_root / "scripts",
+        "preprocess_script": code_root / "scripts" / "preprocess_input_video.py",
         "extract_script": code_root / "scripts" / "extract_frames.py",
+        "normalize_script": code_root / "scripts" / "normalize_multistream_360.py",
         "convert_script": code_root / "scripts" / "convert_360_to_views.py",
         "prepare_script": code_root / "scripts" / "prepare_colmap_images.py",
         "colmap_script": code_root / "scripts" / "run_colmap.py",
@@ -202,6 +219,27 @@ def count_images(folder: Path) -> int:
     return sum(1 for p in folder.iterdir() if p.is_file() and p.suffix.lower() in exts)
 
 
+def build_preprocess_cmd(paths: dict[str, Path], args, python_exe: str) -> list[str]:
+    cmd = [python_exe, str(paths["preprocess_script"])]
+
+    append_optional_value(cmd, "--input", args.input_video)
+    append_optional_value(cmd, "--mode", args.preprocess_mode)
+    append_optional_value(cmd, "--sample-count", args.preprocess_sample_count)
+
+    if args.preprocess_sample_positions:
+        cmd.extend(["--sample-positions", *[str(v) for v in args.preprocess_sample_positions]])
+
+    append_optional_value(cmd, "--force-primary-stream-index", args.preprocess_force_primary_stream_index)
+    append_optional_value(cmd, "--force-frame-format", args.preprocess_force_frame_format)
+    append_optional_value(cmd, "--force-strategy", args.preprocess_force_strategy)
+
+    append_flag(cmd, "--clean", args.clean_preprocess)
+    append_flag(cmd, "--overwrite", args.overwrite)
+    append_flag(cmd, "--verbose", args.verbose)
+
+    return cmd
+
+
 def build_extract_frames_cmd(paths: dict[str, Path], args, python_exe: str) -> list[str]:
     cmd = [python_exe, str(paths["extract_script"])]
 
@@ -214,8 +252,42 @@ def build_extract_frames_cmd(paths: dict[str, Path], args, python_exe: str) -> l
     elif args.target_frames is not None:
         append_optional_value(cmd, "--target-frames", args.target_frames)
 
+    append_optional_value(cmd, "--video-stream-index", args.extract_video_stream_index)
+    append_flag(cmd, "--extract-all-real-video-streams", args.extract_all_real_video_streams)
+    append_flag(cmd, "--use-preprocess-recommendation", args.extract_use_preprocess_recommendation)
+
     append_flag(cmd, "--overwrite", args.overwrite)
     append_flag(cmd, "--clean", args.clean_extract)
+    append_flag(cmd, "--verbose", args.verbose)
+
+    return cmd
+
+
+def build_normalize_multistream_cmd(paths: dict[str, Path], args, python_exe: str) -> list[str]:
+    cmd = [python_exe, str(paths["normalize_script"])]
+
+    append_optional_value(cmd, "--mode", args.normalize_multistream_mode)
+
+    if args.normalize_stream_pair:
+        cmd.extend(["--stream-pair", *[str(v) for v in args.normalize_stream_pair]])
+
+    append_flag(cmd, "--use-preprocess-recommendation", args.normalize_use_preprocess_recommendation)
+    append_optional_value(cmd, "--output-format", args.normalize_output_format)
+    append_optional_value(cmd, "--layout", args.normalize_layout)
+    append_optional_value(cmd, "--resize-streams-to", args.normalize_resize_streams_to)
+    append_optional_value(cmd, "--rotate-a", args.normalize_rotate_a)
+    append_optional_value(cmd, "--rotate-b", args.normalize_rotate_b)
+
+    append_flag(cmd, "--flip-h-a", args.normalize_flip_h_a)
+    append_flag(cmd, "--flip-v-a", args.normalize_flip_v_a)
+    append_flag(cmd, "--flip-h-b", args.normalize_flip_h_b)
+    append_flag(cmd, "--flip-v-b", args.normalize_flip_v_b)
+
+    append_optional_value(cmd, "--output-prefix", args.normalize_output_prefix)
+    append_optional_value(cmd, "--limit", args.normalize_limit)
+
+    append_flag(cmd, "--overwrite", args.overwrite)
+    append_flag(cmd, "--clean", args.clean_normalize)
     append_flag(cmd, "--verbose", args.verbose)
 
     return cmd
@@ -230,7 +302,10 @@ def build_convert_views_cmd(paths: dict[str, Path], args, python_exe: str) -> li
     ]
 
     append_optional_value(cmd, "--input-prefix", args.frame_prefix)
-    append_optional_value(cmd, "--input-format", args.input_format)
+    input_format_value = args.input_format
+    if input_format_value is None and args.normalize_multistream_mode != "off":
+        input_format_value = "auto"
+    append_optional_value(cmd, "--input-format", input_format_value)
     append_optional_value(cmd, "--input-h-fov", args.input_h_fov)
     append_optional_value(cmd, "--input-v-fov", args.input_v_fov)
     append_optional_value(cmd, "--input-d-fov", args.input_d_fov)
@@ -301,10 +376,27 @@ def build_run_colmap_cmd(paths: dict[str, Path], args, python_exe: str) -> list[
 
 
 def validate_extract_outputs(paths: dict[str, Path], args) -> tuple[bool, str]:
-    count = len(list(paths["frames_360"].glob(f"{args.frame_prefix}_*.jpg")))
-    if count == 0:
-        return False, "No extracted 360 frames were found."
-    return True, f"Extracted frame count looks valid: {count}"
+    flat_count = len(list(paths["frames_360"].glob(f"{args.frame_prefix}_*.jpg")))
+    streams_root = paths["frames_360"] / "streams"
+    stream_counts: dict[str, int] = {}
+    total_stream_count = 0
+    if streams_root.exists():
+        for child in sorted(streams_root.iterdir()):
+            if child.is_dir():
+                count = count_images(child)
+                stream_counts[child.name] = count
+                total_stream_count += count
+
+    metadata_payload = load_json_file(paths["frames_360"] / EXTRACTION_METADATA_FILENAME)
+    layout = metadata_payload.get("output_layout") if metadata_payload else None
+
+    if flat_count == 0 and total_stream_count == 0:
+        return False, "No extracted 360 frames were found in flat or multistream output locations."
+
+    if layout == "streams" or total_stream_count > 0:
+        return True, f"Multistream extracted frame counts look valid: {stream_counts}"
+
+    return True, f"Extracted frame count looks valid: {flat_count}"
 
 
 def validate_convert_outputs(paths: dict[str, Path], args) -> tuple[bool, str]:
@@ -347,8 +439,31 @@ def validate_colmap_outputs(paths: dict[str, Path], args) -> tuple[bool, str]:
     return True, f"COLMAP outputs look valid: database present, sparse model folders={len(model_dirs)}"
 
 
+def validate_preprocess_outputs(paths: dict[str, Path], args) -> tuple[bool, str]:
+    if args.preprocess_mode == "off":
+        return True, "Preprocess step disabled."
+    metadata_path = paths["input_video"] / "_preprocess_metadata.json"
+    if not metadata_path.exists():
+        return False, f"Preprocess metadata sidecar was not created: {metadata_path}"
+    return True, f"Preprocess metadata sidecar exists: {metadata_path}"
+
+
+def validate_normalize_outputs(paths: dict[str, Path], args) -> tuple[bool, str]:
+    if args.normalize_multistream_mode == "off":
+        return True, "Normalize multistream step disabled."
+    metadata_path = paths["frames_360"] / NORMALIZATION_METADATA_FILENAME
+    if not metadata_path.exists():
+        return False, f"Normalization metadata sidecar was not created: {metadata_path}"
+    flat_count = len(list(paths["frames_360"].glob(f"{(args.normalize_output_prefix or args.frame_prefix)}_*.jpg")))
+    if flat_count == 0:
+        return False, "Normalize multistream did not produce any flat normalized frames."
+    return True, f"Normalization metadata sidecar exists and produced {flat_count} normalized frame(s)."
+
+
 STEP_VALIDATORS = {
+    "preprocess_input_video": validate_preprocess_outputs,
     "extract_frames": validate_extract_outputs,
+    "normalize_multistream_360": validate_normalize_outputs,
     "convert_360_to_views": validate_convert_outputs,
     "prepare_colmap_images": validate_prepare_outputs,
     "run_colmap": validate_colmap_outputs,
@@ -422,14 +537,79 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--frame-prefix", type=str, default="frame360")
 
+    # Preprocess step
+    parser.add_argument(
+        "--preprocess-mode",
+        choices=["off", "report-only", "auto"],
+        default="off",
+        help="Preprocess input container before frame extraction. 'off' skips the step, 'report-only' writes recommendations only, and 'auto' is reserved for future automatic wiring while still writing a report today.",
+    )
+    parser.add_argument(
+        "--preprocess-sample-count",
+        type=int,
+        default=3,
+        help="Number of evenly spaced timestamps to sample per candidate stream during preprocessing.",
+    )
+    parser.add_argument(
+        "--preprocess-sample-positions",
+        nargs="*",
+        type=float,
+        default=None,
+        help="Optional sample position fractions for preprocessing, for example 0.2 0.5 0.8.",
+    )
+    parser.add_argument(
+        "--preprocess-force-primary-stream-index",
+        type=int,
+        default=None,
+        help="Force the recommended primary stream index in the preprocess sidecar.",
+    )
+    parser.add_argument(
+        "--preprocess-force-frame-format",
+        type=str,
+        default=None,
+        help="Force the recommended frame format in the preprocess sidecar, for example equirect, fisheye, dfisheye, or flat.",
+    )
+    parser.add_argument(
+        "--preprocess-force-strategy",
+        choices=["single_stream", "single_stream_best_of_n", "extract_both_then_stitch", "manual_review_required"],
+        default=None,
+        help="Force the recommended preprocess strategy in the sidecar.",
+    )
+    parser.add_argument("--clean-preprocess", action="store_true")
+
     # Step 1
     parser.add_argument("--input-video", type=str, default=None)
     parser.add_argument("--extract-fps", type=float, default=None)
     parser.add_argument("--target-frames", type=int, default=100)
     parser.add_argument("--frame-quality", type=int, default=2)
+    parser.add_argument("--extract-video-stream-index", type=int, default=None, help="Explicitly extract one selected video stream index.")
+    parser.add_argument("--extract-all-real-video-streams", action="store_true", help="Extract all non-attached candidate video streams into data/frames_360/streams/stream_XX.")
+    parser.add_argument("--extract-use-preprocess-recommendation", action="store_true", help="Let extract_frames follow the preprocess sidecar recommendation when possible. Explicit stream flags still override this.")
     parser.add_argument("--clean-extract", action="store_true")
 
     # Step 2
+    parser.add_argument(
+        "--normalize-multistream-mode",
+        choices=["off", "auto", "explicit"],
+        default="off",
+        help="Normalize extracted multistream folders into a flat frame set under data/frames_360. 'off' skips the step, 'auto' infers pair/layout/format, and 'explicit' expects manual overrides where needed.",
+    )
+    parser.add_argument("--normalize-stream-pair", nargs=2, type=int, default=None, help="Explicit stream pair to normalize, for example --normalize-stream-pair 0 1")
+    parser.add_argument("--normalize-use-preprocess-recommendation", action="store_true", help="Use preprocess pairwise recommendations when selecting the multistream pair.")
+    parser.add_argument("--normalize-output-format", type=str, default="auto", help="Normalized output format written into the normalization metadata, for example auto, dual-fisheye, dfisheye, or flat.")
+    parser.add_argument("--normalize-layout", choices=["auto", "side_by_side_lr", "side_by_side_rl", "top_bottom_tb", "top_bottom_bt"], default="auto")
+    parser.add_argument("--normalize-resize-streams-to", choices=["match-first", "max", "none"], default="match-first")
+    parser.add_argument("--normalize-rotate-a", type=int, default=0, choices=[0, 90, 180, 270])
+    parser.add_argument("--normalize-rotate-b", type=int, default=0, choices=[0, 90, 180, 270])
+    parser.add_argument("--normalize-flip-h-a", action="store_true")
+    parser.add_argument("--normalize-flip-v-a", action="store_true")
+    parser.add_argument("--normalize-flip-h-b", action="store_true")
+    parser.add_argument("--normalize-flip-v-b", action="store_true")
+    parser.add_argument("--normalize-output-prefix", type=str, default=None, help="Output prefix for normalized flat frames. Defaults to --frame-prefix.")
+    parser.add_argument("--normalize-limit", type=int, default=None)
+    parser.add_argument("--clean-normalize", action="store_true")
+
+    # Step 3
     parser.add_argument(
         "--input-format",
         type=str,
@@ -478,6 +658,12 @@ def parse_args() -> argparse.Namespace:
     if args.extract_fps is not None and args.target_frames is not None:
         parser.error("Use either --extract-fps or --target-frames, not both.")
 
+    if args.preprocess_sample_count < 1:
+        parser.error("--preprocess-sample-count must be at least 1.")
+
+    if args.extract_video_stream_index is not None and args.extract_all_real_video_streams:
+        parser.error("Use either --extract-video-stream-index or --extract-all-real-video-streams, not both.")
+
     return args
 
 
@@ -506,13 +692,25 @@ def main() -> int:
         selected_steps = steps_to_run(args.step_from, args.step_to)
         logger.info("Steps to run: %s", selected_steps)
 
+        if (args.extract_all_real_video_streams or args.extract_use_preprocess_recommendation) and "convert_360_to_views" in selected_steps:
+            logger.warning(
+                "Multistream extraction can populate data/frames_360/streams/stream_XX for later normalization or stitching, but convert_360_to_views still expects flat single-stream frames unless you add a normalizer step next."
+            )
+
         python_exe = sys.executable
         logger.info("Python executable: %s", python_exe)
 
         commands: list[tuple[str, list[str]]] = []
 
+        if "preprocess_input_video" in selected_steps:
+            if args.preprocess_mode == "off":
+                logger.info("Skipping preprocess_input_video because --preprocess-mode is off")
+            else:
+                commands.append(("preprocess_input_video", build_preprocess_cmd(paths, args, python_exe)))
         if "extract_frames" in selected_steps:
             commands.append(("extract_frames", build_extract_frames_cmd(paths, args, python_exe)))
+        if "normalize_multistream_360" in selected_steps and args.normalize_multistream_mode != "off":
+            commands.append(("normalize_multistream_360", build_normalize_multistream_cmd(paths, args, python_exe)))
         if "convert_360_to_views" in selected_steps:
             commands.append(("convert_360_to_views", build_convert_views_cmd(paths, args, python_exe)))
         if "prepare_colmap_images" in selected_steps:

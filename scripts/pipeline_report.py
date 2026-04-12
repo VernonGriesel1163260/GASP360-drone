@@ -15,6 +15,8 @@ from common.workspace import resolve_workspace_root
 
 SCRIPT_NAME = "pipeline_report"
 PROJECTION_METADATA_FILENAME = "_projection_metadata.json"
+PREPROCESS_METADATA_FILENAME = "_preprocess_metadata.json"
+EXTRACTION_METADATA_FILENAME = "_extraction_metadata.json"
 
 
 def project_root_from_script() -> Path:
@@ -64,6 +66,156 @@ def load_json_file(path: Path, logger) -> dict | None:
     except Exception as exc:
         logger.warning("Failed to parse JSON file %s: %s", path, exc)
         return None
+
+
+def summarize_preprocess_metadata(paths: dict[str, Path], logger) -> dict:
+    metadata_path = paths["data"] / "input_video" / PREPROCESS_METADATA_FILENAME
+    payload = load_json_file(metadata_path, logger)
+
+    summary = {
+        "exists": metadata_path.exists(),
+        "path": str(metadata_path),
+        "input_video_name": None,
+        "mode": None,
+        "candidate_stream_count": 0,
+        "candidate_stream_indexes": [],
+        "recommended_strategy": None,
+        "recommended_primary_stream_index": None,
+        "recommended_frame_format": None,
+        "decision_source": None,
+        "pairwise_classes": [],
+        "raw": payload,
+    }
+
+    if not payload:
+        logger.info("Preprocess metadata sidecar exists: %s", summary["exists"])
+        return summary
+
+    recommendation = payload.get("recommendation") or {}
+    candidate_streams = payload.get("candidate_streams") or []
+    pairwise_results = payload.get("pairwise_results") or []
+
+    summary.update(
+        {
+            "input_video_name": payload.get("input_video_name"),
+            "mode": payload.get("mode"),
+            "candidate_stream_count": len(candidate_streams),
+            "candidate_stream_indexes": [stream.get("stream_index") for stream in candidate_streams],
+            "recommended_strategy": recommendation.get("recommended_strategy"),
+            "recommended_primary_stream_index": recommendation.get("recommended_primary_stream_index"),
+            "recommended_frame_format": recommendation.get("recommended_frame_format"),
+            "decision_source": recommendation.get("decision_source"),
+            "pairwise_classes": [pair.get("classification") for pair in pairwise_results],
+        }
+    )
+
+    logger.info("Preprocess metadata sidecar exists: %s", summary["exists"])
+    logger.info("Preprocess metadata input video: %s", summary["input_video_name"])
+    logger.info("Preprocess metadata mode: %s", summary["mode"])
+    logger.info("Preprocess metadata candidate streams: %s", summary["candidate_stream_indexes"])
+    logger.info("Preprocess metadata recommended strategy: %s", summary["recommended_strategy"])
+    logger.info("Preprocess metadata recommended primary stream index: %s", summary["recommended_primary_stream_index"])
+    logger.info("Preprocess metadata recommended frame format: %s", summary["recommended_frame_format"])
+    logger.info("Preprocess metadata decision source: %s", summary["decision_source"])
+
+    return summary
+
+
+def summarize_extraction_metadata(paths: dict[str, Path], logger) -> dict:
+    metadata_path = paths["frames_360"] / EXTRACTION_METADATA_FILENAME
+    payload = load_json_file(metadata_path, logger)
+
+    summary = {
+        "exists": metadata_path.exists(),
+        "path": str(metadata_path),
+        "output_layout": None,
+        "extraction_mode": None,
+        "selected_stream_indexes": [],
+        "stream_frame_counts": {},
+        "flat_frame_count": 0,
+        "total_frame_count": 0,
+        "raw": payload,
+    }
+
+    if not payload:
+        logger.info("Extraction metadata sidecar exists: %s", summary["exists"])
+        return summary
+
+    selected_streams = payload.get("selected_streams") or []
+    stream_frame_counts = {f"stream_{item.get('stream_index'):02d}": item.get("frame_count") for item in selected_streams if item.get("stream_index") is not None}
+    total_frame_count = sum(int(item.get("frame_count") or 0) for item in selected_streams)
+    if payload.get("output_layout") == "flat" and len(selected_streams) == 1:
+        flat_frame_count = int(selected_streams[0].get("frame_count") or 0)
+    else:
+        flat_frame_count = 0
+
+    summary.update(
+        {
+            "output_layout": payload.get("output_layout"),
+            "extraction_mode": payload.get("extraction_mode"),
+            "selected_stream_indexes": [item.get("stream_index") for item in selected_streams],
+            "stream_frame_counts": stream_frame_counts,
+            "flat_frame_count": flat_frame_count,
+            "total_frame_count": total_frame_count,
+        }
+    )
+
+    logger.info("Extraction metadata sidecar exists: %s", summary["exists"])
+    logger.info("Extraction metadata output layout: %s", summary["output_layout"])
+    logger.info("Extraction metadata extraction mode: %s", summary["extraction_mode"])
+    logger.info("Extraction metadata selected stream indexes: %s", summary["selected_stream_indexes"])
+    logger.info("Extraction metadata stream frame counts: %s", summary["stream_frame_counts"])
+
+    return summary
+
+
+def summarize_normalization_metadata(paths: dict[str, Path], logger) -> dict:
+    metadata_path = paths["frames_360"] / NORMALIZATION_METADATA_FILENAME
+    payload = load_json_file(metadata_path, logger)
+
+    summary = {
+        "exists": metadata_path.exists(),
+        "path": str(metadata_path),
+        "mode": None,
+        "pair_selection_mode": None,
+        "selected_pair": [],
+        "resolved_output_format": None,
+        "resolved_layout": None,
+        "effective_convert_input_format": None,
+        "output_prefix": None,
+        "output_frame_count": 0,
+        "raw": payload,
+    }
+
+    if not payload:
+        logger.info("Normalization metadata sidecar exists: %s", summary["exists"])
+        return summary
+
+    selected_pair = payload.get("selected_pair") or []
+    summary.update(
+        {
+            "mode": payload.get("mode"),
+            "pair_selection_mode": payload.get("pair_selection_mode"),
+            "selected_pair": [item.get("stream_index") for item in selected_pair],
+            "resolved_output_format": payload.get("resolved_output_format"),
+            "resolved_layout": payload.get("resolved_layout"),
+            "effective_convert_input_format": payload.get("effective_convert_input_format"),
+            "output_prefix": payload.get("output_prefix"),
+            "output_frame_count": int(payload.get("output_frame_count") or 0),
+        }
+    )
+
+    logger.info("Normalization metadata sidecar exists: %s", summary["exists"])
+    logger.info("Normalization metadata mode: %s", summary["mode"])
+    logger.info("Normalization metadata pair selection mode: %s", summary["pair_selection_mode"])
+    logger.info("Normalization metadata selected pair: %s", summary["selected_pair"])
+    logger.info("Normalization metadata resolved output format: %s", summary["resolved_output_format"])
+    logger.info("Normalization metadata resolved layout: %s", summary["resolved_layout"])
+    logger.info("Normalization metadata effective convert input format: %s", summary["effective_convert_input_format"])
+    logger.info("Normalization metadata output prefix: %s", summary["output_prefix"])
+    logger.info("Normalization metadata output frame count: %s", summary["output_frame_count"])
+
+    return summary
 
 
 def summarize_projection_metadata(paths: dict[str, Path], logger) -> dict:
@@ -128,8 +280,23 @@ def summarize_frames_360(paths: dict[str, Path], logger) -> dict:
     preview = []
     if paths["frames_360"].exists():
         preview = [p.name for p in sorted(paths["frames_360"].iterdir()) if p.is_file() and p.suffix.lower() in {".jpg", ".jpeg", ".png"}][:10]
-    logger.info("360 frames count: %s", count)
-    return {"count": count, "preview": preview}
+
+    streams_root = paths["frames_360"] / "streams"
+    by_stream = {}
+    stream_total = 0
+    if streams_root.exists():
+        for child in sorted(streams_root.iterdir()):
+            if child.is_dir():
+                child_count = count_images(child)
+                by_stream[child.name] = child_count
+                stream_total += child_count
+
+    logger.info("360 flat frames count: %s", count)
+    logger.info("360 multistream total frame count: %s", stream_total)
+    for stream_name, child_count in by_stream.items():
+        logger.info("360 multistream folder '%s': %s image(s)", stream_name, child_count)
+
+    return {"count": count, "preview": preview, "streams_root": str(streams_root), "by_stream": by_stream, "stream_total": stream_total}
 
 
 def summarize_perspective(paths: dict[str, Path], logger) -> dict:
@@ -243,7 +410,36 @@ def summarize_best_model(paths: dict[str, Path], logger) -> dict:
 
 def print_report(summary: dict) -> None:
     print("\n=== Pipeline Report ===")
-    print(f"360 frames: {summary['frames_360']['count']}")
+    preprocess = summary["preprocess"]
+    print("Preprocess summary:")
+    print(f"  sidecar_exists={preprocess['exists']}")
+    print(f"  input_video_name={preprocess['input_video_name']}")
+    print(f"  mode={preprocess['mode']}")
+    print(f"  candidate_stream_count={preprocess['candidate_stream_count']}")
+    print(f"  candidate_stream_indexes={preprocess['candidate_stream_indexes']}")
+    print(f"  recommended_strategy={preprocess['recommended_strategy']}")
+    print(f"  recommended_primary_stream_index={preprocess['recommended_primary_stream_index']}")
+    print(f"  recommended_frame_format={preprocess['recommended_frame_format']}")
+    extraction = summary["extraction"]
+    print("Extraction summary:")
+    print(f"  sidecar_exists={extraction['exists']}")
+    print(f"  output_layout={extraction['output_layout']}")
+    print(f"  extraction_mode={extraction['extraction_mode']}")
+    print(f"  selected_stream_indexes={extraction['selected_stream_indexes']}")
+    print(f"  stream_frame_counts={extraction['stream_frame_counts']}")
+    normalization = summary["normalization"]
+    print("Normalization summary:")
+    print(f"  sidecar_exists={normalization['exists']}")
+    print(f"  mode={normalization['mode']}")
+    print(f"  pair_selection_mode={normalization['pair_selection_mode']}")
+    print(f"  selected_pair={normalization['selected_pair']}")
+    print(f"  resolved_output_format={normalization['resolved_output_format']}")
+    print(f"  resolved_layout={normalization['resolved_layout']}")
+    print(f"  effective_convert_input_format={normalization['effective_convert_input_format']}")
+    print(f"  output_prefix={normalization['output_prefix']}")
+    print(f"  output_frame_count={normalization['output_frame_count']}")
+    print(f"360 flat frames: {summary['frames_360']['count']}")
+    print(f"360 multistream total: {summary['frames_360']['stream_total']}")
     print(f"Perspective images total: {summary['perspective']['total']}")
     for view_name, count in summary["perspective"]["by_view"].items():
         print(f"  - {view_name}: {count}")
@@ -283,6 +479,10 @@ def write_workspace_context(paths: dict[str, Path], summary: dict, logger) -> No
 
     payload = {
         "workspace_root": str(paths["root"]),
+        "preprocess": summary.get("preprocess"),
+        "extraction": summary.get("extraction"),
+        "projection": summary.get("projection_metadata"),
+        "normalization": summary.get("normalization"),
         "data_root": str(paths["data"]),
         "dataset_type": "colmap",
         "colmap": {
@@ -299,6 +499,26 @@ def write_workspace_context(paths: dict[str, Path], summary: dict, logger) -> No
             "registered_images": best["registered_images"],
             "total_input_images": best["total_input_images"],
             "registration_ratio": best["registration_ratio"],
+        },
+        "extraction": {
+            "metadata_sidecar": summary["extraction"].get("path"),
+            "output_layout": summary["extraction"].get("output_layout"),
+            "extraction_mode": summary["extraction"].get("extraction_mode"),
+            "selected_stream_indexes": summary["extraction"].get("selected_stream_indexes"),
+            "stream_frame_counts": summary["extraction"].get("stream_frame_counts"),
+            "flat_frame_count": summary["extraction"].get("flat_frame_count"),
+            "total_frame_count": summary["extraction"].get("total_frame_count"),
+        },
+        "normalization": {
+            "metadata_sidecar": summary["normalization"].get("path"),
+            "mode": summary["normalization"].get("mode"),
+            "pair_selection_mode": summary["normalization"].get("pair_selection_mode"),
+            "selected_pair": summary["normalization"].get("selected_pair"),
+            "resolved_output_format": summary["normalization"].get("resolved_output_format"),
+            "resolved_layout": summary["normalization"].get("resolved_layout"),
+            "effective_convert_input_format": summary["normalization"].get("effective_convert_input_format"),
+            "output_prefix": summary["normalization"].get("output_prefix"),
+            "output_frame_count": summary["normalization"].get("output_frame_count"),
         },
         "projection": {
             "metadata_sidecar": summary["projection_metadata"].get("path"),
@@ -345,7 +565,10 @@ def main() -> int:
         paths = ensure_dirs(root, logger)
 
         summary = {
+            "preprocess": summarize_preprocess_metadata(paths, logger),
             "frames_360": summarize_frames_360(paths, logger),
+            "extraction": summarize_extraction_metadata(paths, logger),
+            "normalization": summarize_normalization_metadata(paths, logger),
             "projection_metadata": summarize_projection_metadata(paths, logger),
             "perspective": summarize_perspective(paths, logger),
             "colmap_images": summarize_colmap_images(paths, logger),
